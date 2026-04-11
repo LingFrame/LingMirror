@@ -14,18 +14,32 @@ plugins {
 group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
 
-// Set the JVM language level used to build the project.
+// 使用 JDK 21 编译，输出 JDK 17 兼容字节码（IDEA 2023.1+ 运行时为 JDK 17）
 kotlin {
     jvmToolchain(21)
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(17)
+    options.encoding = "UTF-8"
+}
+
 // Configure project's dependencies
 repositories {
+    maven("https://maven.aliyun.com/repository/public")
+    maven("https://maven.aliyun.com/repository/central")
     mavenCentral()
 
     // IntelliJ Platform Gradle Plugin Repositories Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-repositories-extension.html
     intellijPlatform {
         defaultRepositories()
+        maven("https://maven.aliyun.com/repository/public")
+        maven("https://maven.aliyun.com/repository/central")
     }
 }
 

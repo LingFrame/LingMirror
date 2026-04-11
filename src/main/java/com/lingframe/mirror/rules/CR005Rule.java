@@ -1,0 +1,271 @@
+package com.lingframe.mirror.rules;
+
+import com.intellij.psi.*;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * CR-005: 静态集合持有通用包装类型.
+ *
+ * <p>检测模式: static Map/Collection 字段的所有泛型参数均为 JDK 通用包装类型
+ * (Object, String, byte[], int[] 等). 这类集合常被用作"垃圾场",
+ * 持续堆积数据但从不清理, 形成内存泄漏.
+ *
+ * <p>与 CR-003 的分工:
+ * - CR-003: 泛型参数中包含自定义/业务类型 (如 SessionContext, MutableKey) → 由 CR-003 报告
+ * - CR-005: 所有泛型参数均为通用包装类型 (如 Object, String, byte[]) → 由 CR-005 报告
+ * - 如果泛型参数中混合了自定义类型和通用类型, 只由 CR-003 报告, CR-005 跳过, 避免重复
+ *
+ * <p>排除规则:
+ * - 泛型参数中包含 Reference 类型 (SoftReference, WeakReference, PhantomReference) → 跳过
+ * - 泛型参数中包含非通用 JDK 类型 (Class, Thread, Exception 等) → 跳过
+ * - 集合类型本身是 WeakHashMap → 跳过
+ *
+ * <p>典型场景:
+ * - static List&lt;Object&gt; leakedReferences — 堆积 ClassLoader/类引用
+ * - static List&lt;String&gt; internedRefs — 堆积 intern 字符串
+ * - static List&lt;byte[]&gt; resurrected — 堆积 finalize 复活数据
+ * - static Map&lt;String, Object&gt; globalCache — 无界缓存
+ */
+public class CR005Rule implements LeakDetectionRule {
+
+    private static final String[] UNIVERSAL_TYPES = {
+            "java.lang.Object",
+            "java.lang.String",
+            "java.lang.Integer",
+            "java.lang.Long",
+            "java.lang.Byte",
+            "java.lang.Short",
+            "java.lang.Character",
+            "java.lang.Float",
+            "java.lang.Double",
+            "java.lang.Boolean",
+            "java.lang.Number",
+    };
+
+    private static final String[] PRIMITIVE_ARRAY_PREFIXES = {
+            "byte[]", "short[]", "int[]", "long[]",
+            "float[]", "double[]", "char[]", "boolean[]",
+    };
+
+    @NotNull
+    @Override
+    public String ruleId() {
+        return "CR-005";
+    }
+
+    @NotNull
+    @Override
+    public String ruleName() {
+        return "静态集合持有通用包装类型";
+    }
+
+    @NotNull
+    @Override
+    public RiskLevel riskLevel() {
+        return RiskLevel.HIGH;
+    }
+
+    @NotNull
+    @Override
+    public List<RuleViolation> check(@NotNull PsiClass psiClass, @NotNull ScanContext context) {
+        List<RuleViolation> violations = new ArrayList<>();
+
+        for (PsiField field : psiClass.getFields()) {
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+
+            PsiType type = field.getType();
+            if (!(type instanceof PsiClassType)) continue;
+
+            PsiClassType classType = (PsiClassType) type;
+            PsiClass fieldClass = classType.resolve();
+            if (fieldClass == null) continue;
+
+            if (!isMapOrCollection(fieldClass)) continue;
+
+            if (isWeakReferenceBasedCollection(fieldClass)) continue;
+
+            PsiType[] typeArgs = classType.getParameters();
+            if (typeArgs.length == 0) continue;
+
+            if (hasReferenceTypeParam(typeArgs)) continue;
+
+            if (hasCustomTypeParam(typeArgs)) continue;
+
+            if (!allParamsAreUniversal(typeArgs)) continue;
+
+            List<String> universalTypeNames = extractUniversalTypeNames(typeArgs);
+
+            violations.add(buildViolation(field, psiClass, universalTypeNames));
+        }
+
+        return violations;
+    }
+
+    private boolean hasReferenceTypeParam(PsiType[] typeArgs) {
+        for (PsiType arg : typeArgs) {
+            if (isReferenceType(arg)) return true;
+            PsiType innerType = extractInnerType(arg);
+            if (innerType != null && isReferenceType(innerType)) return true;
+        }
+        return false;
+    }
+
+    private boolean isReferenceType(PsiType type) {
+        if (!(type instanceof PsiClassType)) return false;
+        PsiClass resolved = ((PsiClassType) type).resolve();
+        if (resolved == null) return false;
+        String qName = resolved.getQualifiedName();
+        if (qName == null) return false;
+        return qName.equals("java.lang.ref.SoftReference")
+                || qName.equals("java.lang.ref.WeakReference")
+                || qName.equals("java.lang.ref.PhantomReference");
+    }
+
+    private PsiType extractInnerType(PsiType type) {
+        if (!(type instanceof PsiClassType)) return null;
+        PsiType[] params = ((PsiClassType) type).getParameters();
+        if (params.length > 0) return params[0];
+        return null;
+    }
+
+    private boolean hasCustomTypeParam(PsiType[] typeArgs) {
+        for (PsiType arg : typeArgs) {
+            String canonical = arg.getCanonicalText();
+            if (!isUniversalJdkType(canonical)
+                    && !isPrimitiveArray(canonical)
+                    && !isNonUniversalJdkType(canonical)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean allParamsAreUniversal(PsiType[] typeArgs) {
+        for (PsiType arg : typeArgs) {
+            String canonical = arg.getCanonicalText();
+            if (!isUniversalJdkType(canonical) && !isPrimitiveArray(canonical)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isNonUniversalJdkType(String canonicalText) {
+        if (!canonicalText.startsWith("java.")) return false;
+        for (String universal : UNIVERSAL_TYPES) {
+            if (canonicalText.equals(universal)
+                    || canonicalText.startsWith(universal + "<")
+                    || canonicalText.startsWith(universal + "[")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<String> extractUniversalTypeNames(PsiType[] typeArgs) {
+        List<String> result = new ArrayList<>();
+        for (PsiType arg : typeArgs) {
+            String canonical = arg.getCanonicalText();
+            if (isUniversalJdkType(canonical) || isPrimitiveArray(canonical)) {
+                result.add(canonical);
+            }
+        }
+        return result;
+    }
+
+    private boolean isMapOrCollection(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return isMapOrCollectionFqn(qName);
+    }
+
+    private boolean isMapOrCollectionFqn(String fqn) {
+        if (fqn.startsWith("java.util.Map")) return true;
+        if (fqn.startsWith("java.util.HashMap")) return true;
+        if (fqn.startsWith("java.util.LinkedHashMap")) return true;
+        if (fqn.startsWith("java.util.TreeMap")) return true;
+        if (fqn.startsWith("java.util.ConcurrentHashMap")) return true;
+        if (fqn.startsWith("java.util.concurrent.ConcurrentMap")) return true;
+        if (fqn.startsWith("java.util.Collection")) return true;
+        if (fqn.startsWith("java.util.List")) return true;
+        if (fqn.startsWith("java.util.Set")) return true;
+        if (fqn.startsWith("java.util.Queue")) return true;
+        if (fqn.startsWith("java.util.ArrayList")) return true;
+        if (fqn.startsWith("java.util.LinkedList")) return true;
+        if (fqn.startsWith("java.util.HashSet")) return true;
+        if (fqn.startsWith("java.util.LinkedHashSet")) return true;
+        if (fqn.startsWith("java.util.TreeSet")) return true;
+        if (fqn.startsWith("java.util.concurrent.CopyOnWriteArrayList")) return true;
+        return false;
+    }
+
+    private boolean isWeakReferenceBasedCollection(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.contains("WeakHashMap");
+    }
+
+    private boolean isUniversalJdkType(String canonicalText) {
+        for (String universal : UNIVERSAL_TYPES) {
+            if (canonicalText.equals(universal)
+                    || canonicalText.startsWith(universal + "<")
+                    || canonicalText.startsWith(universal + "[")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isPrimitiveArray(String canonicalText) {
+        for (String prefix : PRIMITIVE_ARRAY_PREFIXES) {
+            if (canonicalText.equals(prefix) || canonicalText.startsWith(prefix + "[")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private RuleViolation buildViolation(PsiField field, PsiClass psiClass,
+                                         List<String> universalTypes) {
+        String location = psiClass.getQualifiedName() + "." + field.getName();
+        String typesStr = String.join(", ", universalTypes);
+
+        StringBuilder chainBuilder = new StringBuilder();
+        chainBuilder.append("static ").append(field.getName())
+                .append("  ← 全局根节点(永不释放)\n");
+        chainBuilder.append("  └─ Collection/Map 元素\n");
+        for (String t : universalTypes) {
+            chainBuilder.append("       └─ ").append(t).append(" 实例 ← 持续累积\n");
+        }
+        chainBuilder.append("            └─ 可能间接引用 ClassLoader / 大对象\n");
+
+        String description = "静态集合字段 " + field.getName()
+                + " 的泛型参数为通用包装类型 (" + typesStr + "). "
+                + "这类集合容易被用作无界缓存或引用堆积点, "
+                + "持续添加元素但不清理, 导致内存持续增长. "
+                + "即使单个元素看起来很小(如 Object/String), 累积后也会造成严重泄漏.";
+
+        String fixSuggestion = "1. 使用有界集合(如 Guava Cache.evictBySize)限制最大容量; "
+                + "2. 定期清理过期条目(如定时任务清除); "
+                + "3. 改用 WeakHashMap/WeakReference 让 GC 自动回收不可达元素; "
+                + "4. 如果确实需要长期存储, 考虑使用磁盘/数据库而非堆内存.";
+
+        return RuleViolation.builder()
+                .ruleId(ruleId())
+                .ruleName(ruleName())
+                .riskLevel(riskLevel())
+                .location(location)
+                .referenceChain(chainBuilder.toString())
+                .description(description)
+                .fixSuggestion(fixSuggestion)
+                .navigationInfo(
+                        field.getContainingFile() != null ? field.getContainingFile().getVirtualFile() : null,
+                        field.getTextOffset()
+                )
+                .build();
+    }
+}

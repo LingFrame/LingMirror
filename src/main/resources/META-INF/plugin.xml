@@ -1,15 +1,19 @@
-<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <id>com.github.knight6236.lingmirror</id>
-    <name>LingMirror</name>
-    <vendor>knight6236</vendor>
+    <id>com.lingmirror</id>
+    <name>灵镜 • LingMirror</name>
+    <vendor>LingFrame</vendor>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
 
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.knight6236.lingmirror.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.knight6236.lingmirror.startup.MyProjectActivity" />
+        <toolWindow
+                factoryClass="com.lingframe.mirror.toolWindow.LingMirrorWindowFactory"
+                id="LingMirror"
+                anchor="right"
+                icon="/images/logo.png"/>
     </extensions>
+
 </idea-plugin>
