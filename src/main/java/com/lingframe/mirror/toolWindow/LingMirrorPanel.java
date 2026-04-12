@@ -1,5 +1,6 @@
 package com.lingframe.mirror.toolWindow;
 
+import com.intellij.ide.BrowserUtil;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.module.Module;
@@ -8,6 +9,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
+import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.*;
 import com.intellij.util.ui.JBUI;
@@ -106,8 +108,7 @@ public class LingMirrorPanel {
         JLabel iconLabel = new JLabel("🪞");
         iconLabel.setFont(iconLabel.getFont().deriveFont(Font.BOLD, 18f));
 
-        JBLabel titleLabel = new JBLabel("<html><b style='font-size:15px'>灵镜</b>"
-                + "<span style='font-size:13px; color:#888; margin-left:4px'>LingMirror</span></html>");
+        JBLabel titleLabel = new JBLabel("<html><b style='font-size:15px'>灵镜</b></html>");
         JBLabel subtitleLabel = new JBLabel("类加载器泄漏扫描");
         subtitleLabel.setFont(subtitleLabel.getFont().deriveFont(Font.PLAIN, 13f));
         subtitleLabel.setForeground(JBColor.GRAY);
@@ -202,7 +203,7 @@ public class LingMirrorPanel {
     }
 
     private void startScan() {
-        com.intellij.psi.search.GlobalSearchScope scope = resolveScope();
+        GlobalSearchScope scope = resolveScope();
         if (scope == null) return;
 
         resultPanel.removeAll();
@@ -240,11 +241,9 @@ public class LingMirrorPanel {
                 scope,
                 progress -> SwingUtilities.invokeLater(() -> {
                     progressLabel.setText(progress);
-                    if (scanningLabel != null) {
-                        String shortMsg = progress.replace("灵镜：", "").replace("...", "");
-                        scanningLabel.setText("<html><div style='text-align:center'>"
-                                + "<b style='font-size:13px'>" + shortMsg + "</b></div></html>");
-                    }
+                    String shortMsg = progress.replace("灵镜：", "").replace("...", "");
+                    scanningLabel.setText("<html><div style='text-align:center'>"
+                            + "<b style='font-size:13px'>" + shortMsg + "</b></div></html>");
                 }),
                 violations -> SwingUtilities.invokeLater(() -> renderResult(violations))
         );
@@ -390,15 +389,15 @@ public class LingMirrorPanel {
         JPanel tipPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
         tipPanel.setOpaque(false);
 
-        JBLabel tipLabel = new JBLabel("<html><div style='text-align:center; font-size:13px; color:#888'>"
-                + "💡 引入 <b>LingFrame</b> 可实现运行时自动治理 · "
+        JBLabel tipLabel = new JBLabel("<html><div style='text-align:center; font-size:12px; color:#888'>"
+                + "💡 引入 <b>灵珑 • LingFrame</b> 可实现运行时自动治理 · "
                 + "<a href='https://gitee.com/LingFrame/LingFrame'>gitee.com/LingFrame/LingFrame</a>"
                 + "</div></html>");
         tipLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         tipLabel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                com.intellij.ide.BrowserUtil.browse("https://gitee.com/LingFrame/LingFrame");
+                BrowserUtil.browse("https://gitee.com/LingFrame/LingFrame");
             }
         });
 
@@ -438,12 +437,12 @@ public class LingMirrorPanel {
         ruleInfo.add(badge, BorderLayout.WEST);
         ruleInfo.add(nameLabel, BorderLayout.CENTER);
 
-        JButton jumpBtn = new JButton("跳转");
+        JButton jumpBtn = new JButton("定位");
         jumpBtn.setEnabled(v.isNavigable());
         jumpBtn.setFont(jumpBtn.getFont().deriveFont(Font.PLAIN, 12f));
         jumpBtn.setMargin(JBUI.insets(4, 14, 4, 14));
         jumpBtn.addActionListener(e -> {
-            if (v.isNavigable()) {
+            if (v.isNavigable() && v.getVirtualFile() != null) {
                 new OpenFileDescriptor(project, v.getVirtualFile(), v.getOffset()).navigate(true);
             }
         });

@@ -56,24 +56,33 @@ public class HI002Rule implements LeakDetectionRule {
         List<PsiField> threadLocalFields = new ArrayList<>();
         collectThreadLocalFields(psiClass, threadLocalFields);
 
-        if (threadLocalFields.size() < 2) return violations;
+        if (threadLocalFields.isEmpty()) return violations;
 
         Set<PsiField> removedFields = new HashSet<>();
         findRemovedThreadLocalFields(psiClass, threadLocalFields, removedFields);
 
-        if (removedFields.isEmpty()) return violations;
+        Set<PsiField> alreadyReported = new HashSet<>();
 
-        List<PsiField> unremovedFields = new ArrayList<>();
-        for (PsiField tlField : threadLocalFields) {
-            if (!removedFields.contains(tlField)) {
-                unremovedFields.add(tlField);
+        if (threadLocalFields.size() >= 2 && !removedFields.isEmpty()) {
+            List<PsiField> unremovedFields = new ArrayList<>();
+            for (PsiField tlField : threadLocalFields) {
+                if (!removedFields.contains(tlField)) {
+                    unremovedFields.add(tlField);
+                }
+            }
+
+            for (PsiField unremoved : unremovedFields) {
+                violations.add(buildSingleViolation(psiClass, unremoved, removedFields));
+                alreadyReported.add(unremoved);
             }
         }
 
-        if (unremovedFields.isEmpty()) return violations;
-
-        for (PsiField unremoved : unremovedFields) {
-            violations.add(buildSingleViolation(psiClass, unremoved, removedFields));
+        for (PsiField tlField : threadLocalFields) {
+            if (removedFields.contains(tlField)) continue;
+            if (alreadyReported.contains(tlField)) continue;
+            if (hasMutableCollectionValueType(tlField)) {
+                violations.add(buildMutableCollectionViolation(psiClass, tlField));
+            }
         }
 
         return violations;
@@ -221,6 +230,80 @@ public class HI002Rule implements LeakDetectionRule {
                         unremovedField.getContainingFile() != null
                                 ? unremovedField.getContainingFile().getVirtualFile() : null,
                         unremovedField.getTextOffset()
+                )
+                .build();
+    }
+
+    private boolean hasMutableCollectionValueType(PsiField tlField) {
+        PsiType type = tlField.getType();
+        if (!(type instanceof PsiClassType)) return false;
+        PsiType[] typeArgs = ((PsiClassType) type).getParameters();
+        if (typeArgs.length == 0) return false;
+
+        PsiType valueType = typeArgs[0];
+        if (!(valueType instanceof PsiClassType)) return false;
+        PsiClass valueClass = ((PsiClassType) valueType).resolve();
+        if (valueClass == null) return false;
+
+        String qName = valueClass.getQualifiedName();
+        if (qName == null) return false;
+
+        return qName.startsWith("java.util.Map")
+                || qName.startsWith("java.util.HashMap")
+                || qName.startsWith("java.util.LinkedHashMap")
+                || qName.startsWith("java.util.ConcurrentHashMap")
+                || qName.startsWith("java.util.Collection")
+                || qName.startsWith("java.util.List")
+                || qName.startsWith("java.util.Set")
+                || qName.startsWith("java.util.ArrayList")
+                || qName.startsWith("java.util.HashSet");
+    }
+
+    private RuleViolation buildMutableCollectionViolation(PsiClass psiClass, PsiField tlField) {
+        PsiClass holderClass = tlField.getContainingClass();
+        String holderName = holderClass != null ? holderClass.getName() : "";
+        String fieldName = holderName + "." + tlField.getName();
+        String location = psiClass.getQualifiedName();
+
+        PsiType type = tlField.getType();
+        String valueTypeName = "可变集合";
+        if (type instanceof PsiClassType) {
+            PsiType[] typeArgs = ((PsiClassType) type).getParameters();
+            if (typeArgs.length > 0) {
+                valueTypeName = typeArgs[0].getPresentableText();
+            }
+        }
+
+        StringBuilder chainBuilder = new StringBuilder();
+        chainBuilder.append(fieldName).append("  ← ThreadLocal 未清理\n");
+        chainBuilder.append("  └─ ThreadLocalMap.Entry\n");
+        chainBuilder.append("       └─ ").append(valueTypeName).append(" ← 可变集合, 数据跨请求累积\n");
+        chainBuilder.append("            └─ ClassLoader ← ❌ 无法卸载\n");
+
+        String description = "ThreadLocal 字段 " + fieldName + " 的值类型为可变集合 "
+                + valueTypeName + ", 且从未调用 remove(). "
+                + "线程池线程会被复用, 同一线程处理多个请求时, 集合中的数据会跨请求持续累积, "
+                + "导致内存持续增长且 ClassLoader 无法回收. "
+                + "ThreadLocal.withInitial() 只在线程首次 get() 时创建初始值, 后续 get() 返回同一个实例, "
+                + "开发者容易误以为每次 get() 都会创建新值.";
+
+        String fixSuggestion = "1. 在请求处理完成后(如 finally 块中)调用 "
+                + fieldName + ".remove(), 确保每次使用后清理; "
+                + "2. 如果需要保留部分数据, 使用 remove() 后重新 withInitial() 重置; "
+                + "3. 考虑使用不带初始值的 ThreadLocal, 在每次 get() 前显式设置值.";
+
+        return RuleViolation.builder()
+                .ruleId(ruleId())
+                .ruleName(ruleName())
+                .riskLevel(riskLevel())
+                .location(location)
+                .referenceChain(chainBuilder.toString())
+                .description(description)
+                .fixSuggestion(fixSuggestion)
+                .navigationInfo(
+                        tlField.getContainingFile() != null
+                                ? tlField.getContainingFile().getVirtualFile() : null,
+                        tlField.getTextOffset()
                 )
                 .build();
     }

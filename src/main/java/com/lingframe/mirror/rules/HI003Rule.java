@@ -1,9 +1,11 @@
 package com.lingframe.mirror.rules;
 
 import com.intellij.psi.*;
+import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -28,13 +30,13 @@ public class HI003Rule implements LeakDetectionRule {
 
     static {
         Collections.addAll(REGISTER_METHODS,
-                "subscribe", "addListener", "addObserver", "register",
-                "subscribeGlobal", "registerListener", "addHandler",
+                "subscribe", "addListener", "addObserver",
+                "register", "registerListener", "addHandler",
                 "registerCallback", "addEventListener");
 
         Collections.addAll(UNREGISTER_METHODS,
-                "unsubscribe", "removeListener", "removeObserver", "unregister",
-                "unsubscribeGlobal", "unregisterListener", "removeHandler",
+                "unsubscribe", "removeListener", "removeObserver",
+                "unregister", "unregisterListener", "removeHandler",
                 "unregisterCallback", "removeEventListener");
 
         Collections.addAll(CLEANUP_METHODS,
@@ -70,6 +72,8 @@ public class HI003Rule implements LeakDetectionRule {
 
         if (registrations.isEmpty()) return violations;
 
+        if (!hasCleanupMethod(psiClass)) return violations;
+
         Set<String> unregisteredTargets = findUnregisteredTargets(psiClass, registrations);
 
         for (String target : unregisteredTargets) {
@@ -80,33 +84,30 @@ public class HI003Rule implements LeakDetectionRule {
     }
 
     private void collectRegistrations(PsiClass cls, List<RegistrationRecord> registrations) {
-        for (PsiMethod method : cls.getMethods()) {
-            if (method.getContainingClass() != cls) continue;
-            if (isCleanupMethod(method)) continue;
+        Collection<PsiMethodCallExpression> calls =
+                PsiTreeUtil.findChildrenOfType(cls, PsiMethodCallExpression.class);
 
-            PsiCodeBlock body = method.getBody();
-            if (body == null) continue;
+        for (PsiMethodCallExpression expression : calls) {
+            PsiClass containingClass = PsiTreeUtil.getParentOfType(expression, PsiClass.class);
+            if (containingClass != cls) continue;
 
-            body.accept(new JavaRecursiveElementVisitor() {
-                @Override
-                public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
-                    PsiMethod resolved = expression.resolveMethod();
-                    if (resolved == null) {
-                        super.visitMethodCallExpression(expression);
-                        return;
-                    }
+            PsiMethod containingMethod = PsiTreeUtil.getParentOfType(expression, PsiMethod.class);
+            if (containingMethod != null && isCleanupMethod(containingMethod)) continue;
 
-                    String methodName = resolved.getName();
-                    if (REGISTER_METHODS.contains(methodName)) {
-                        PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
-                        String target = describeTarget(qualifier, methodName);
-                        registrations.add(new RegistrationRecord(methodName, target, method.getName()));
-                    }
+            String methodName = resolveMethodName(expression);
+            if (methodName == null || !REGISTER_METHODS.contains(methodName)) continue;
 
-                    super.visitMethodCallExpression(expression);
-                }
-            });
+            PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+            String target = describeTarget(qualifier, methodName);
+            String inMethod = containingMethod != null ? containingMethod.getName() : "<init>";
+            registrations.add(new RegistrationRecord(methodName, target, inMethod));
         }
+    }
+
+    private String resolveMethodName(PsiMethodCallExpression expression) {
+        PsiMethod resolved = expression.resolveMethod();
+        if (resolved != null) return resolved.getName();
+        return expression.getMethodExpression().getReferenceName();
     }
 
     private Set<String> findUnregisteredTargets(PsiClass cls, List<RegistrationRecord> registrations) {
@@ -118,6 +119,7 @@ public class HI003Rule implements LeakDetectionRule {
         Set<String> unregisteredTargets = new HashSet<>(registeredTargets);
 
         for (PsiMethod method : cls.getMethods()) {
+            if (method.getContainingClass() != cls) continue;
             if (!isCleanupMethod(method)) continue;
 
             PsiCodeBlock body = method.getBody();
@@ -126,14 +128,8 @@ public class HI003Rule implements LeakDetectionRule {
             body.accept(new JavaRecursiveElementVisitor() {
                 @Override
                 public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
-                    PsiMethod resolved = expression.resolveMethod();
-                    if (resolved == null) {
-                        super.visitMethodCallExpression(expression);
-                        return;
-                    }
-
-                    String methodName = resolved.getName();
-                    if (UNREGISTER_METHODS.contains(methodName)) {
+                    String methodName = resolveMethodName(expression);
+                    if (methodName != null && UNREGISTER_METHODS.contains(methodName)) {
                         PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
                         String target = describeTarget(qualifier, methodName);
                         unregisteredTargets.remove(target);
@@ -172,6 +168,13 @@ public class HI003Rule implements LeakDetectionRule {
         return false;
     }
 
+    private boolean hasCleanupMethod(PsiClass cls) {
+        for (PsiMethod method : cls.getMethods()) {
+            if (isCleanupMethod(method)) return true;
+        }
+        return false;
+    }
+
     private RuleViolation buildViolation(PsiClass cls, String target,
                                            List<RegistrationRecord> registrations) {
         String className = cls.getQualifiedName();
@@ -179,7 +182,7 @@ public class HI003Rule implements LeakDetectionRule {
 
         String location = className + ".destroy/close";
 
-        List<String> regDetails = new ArrayList<>();
+        Set<String> regDetails = new java.util.LinkedHashSet<>();
         for (RegistrationRecord reg : registrations) {
             if (reg.target.equals(target)) {
                 regDetails.add(reg.registerMethod + "() in " + reg.inMethod + "()");

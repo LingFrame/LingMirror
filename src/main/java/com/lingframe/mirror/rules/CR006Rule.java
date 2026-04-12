@@ -81,6 +81,11 @@ public class CR006Rule implements LeakDetectionRule {
                         return;
                     }
 
+                    if (!capturesEnclosingInstance(lastArg, psiClass)) {
+                        super.visitMethodCallExpression(expression);
+                        return;
+                    }
+
                     PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
                     if (qualifier == null) {
                         super.visitMethodCallExpression(expression);
@@ -103,7 +108,6 @@ public class CR006Rule implements LeakDetectionRule {
         return "add".equals(methodName)
                 || "put".equals(methodName)
                 || "subscribe".equals(methodName)
-                || "subscribeGlobal".equals(methodName)
                 || "register".equals(methodName)
                 || "addListener".equals(methodName)
                 || "addObserver".equals(methodName)
@@ -114,6 +118,8 @@ public class CR006Rule implements LeakDetectionRule {
 
     private boolean isAnonymousOrLambda(PsiExpression expr) {
         if (expr instanceof PsiLambdaExpression) return true;
+
+        if (expr instanceof PsiMethodReferenceExpression) return true;
 
         if (expr instanceof PsiNewExpression) {
             PsiNewExpression newExpr = (PsiNewExpression) expr;
@@ -156,9 +162,7 @@ public class CR006Rule implements LeakDetectionRule {
                 if ("getInstance".equals(methodName)
                         || "instance".equals(methodName)
                         || "getDefault".equals(methodName)
-                        || "getSingleton".equals(methodName)
-                        || "create".equals(methodName)
-                        || "newInstance".equals(methodName)) {
+                        || "getSingleton".equals(methodName)) {
                     return true;
                 }
             }
@@ -214,6 +218,9 @@ public class CR006Rule implements LeakDetectionRule {
         if (expr instanceof PsiLambdaExpression) {
             return "lambda";
         }
+        if (expr instanceof PsiMethodReferenceExpression) {
+            return "方法引用";
+        }
         if (expr instanceof PsiNewExpression) {
             PsiNewExpression newExpr = (PsiNewExpression) expr;
             PsiAnonymousClass anonClass = newExpr.getAnonymousClass();
@@ -230,5 +237,83 @@ public class CR006Rule implements LeakDetectionRule {
             }
         }
         return "匿名对象";
+    }
+
+    private boolean capturesEnclosingInstance(PsiExpression expr, PsiClass enclosingClass) {
+        if (expr instanceof PsiLambdaExpression) {
+            PsiLambdaExpression lambda = (PsiLambdaExpression) expr;
+            return referencesInstanceMembers(lambda.getBody(), enclosingClass);
+        }
+        if (expr instanceof PsiMethodReferenceExpression) {
+            PsiMethodReferenceExpression methodRef = (PsiMethodReferenceExpression) expr;
+            PsiExpression qualifier = methodRef.getQualifierExpression();
+            if (qualifier instanceof PsiReferenceExpression) {
+                PsiElement resolved = ((PsiReferenceExpression) qualifier).resolve();
+                if (resolved instanceof PsiField) {
+                    PsiField field = (PsiField) resolved;
+                    if (!field.hasModifierProperty(PsiModifier.STATIC)) return true;
+                }
+                if (resolved instanceof PsiLocalVariable) return true;
+            }
+            if (qualifier instanceof PsiThisExpression) return true;
+            return false;
+        }
+        if (expr instanceof PsiNewExpression) {
+            PsiNewExpression newExpr = (PsiNewExpression) expr;
+            PsiAnonymousClass anonClass = newExpr.getAnonymousClass();
+            if (anonClass != null) {
+                return referencesInstanceMembers(anonClass, enclosingClass);
+            }
+        }
+        return true;
+    }
+
+    private boolean referencesInstanceMembers(PsiElement element, PsiClass enclosingClass) {
+        if (element == null) return false;
+
+        boolean[] found = {false};
+        element.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitReferenceExpression(@NotNull PsiReferenceExpression expression) {
+                if (found[0]) return;
+
+                PsiElement resolved = expression.resolve();
+                if (resolved instanceof PsiField) {
+                    PsiField field = (PsiField) resolved;
+                    if (isInstanceMemberOf(field, enclosingClass)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+                if (resolved instanceof PsiMethod) {
+                    PsiMethod method = (PsiMethod) resolved;
+                    if (isInstanceMemberOf(method, enclosingClass)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+
+                super.visitReferenceExpression(expression);
+            }
+
+            @Override
+            public void visitThisExpression(@NotNull PsiThisExpression expression) {
+                if (found[0]) return;
+                if (expression.getQualifier() != null) {
+                    found[0] = true;
+                    return;
+                }
+                super.visitThisExpression(expression);
+            }
+        });
+
+        return found[0];
+    }
+
+    private boolean isInstanceMemberOf(PsiMember member, PsiClass cls) {
+        PsiClass memberClass = member.getContainingClass();
+        if (memberClass == null) return false;
+        if (!memberClass.equals(cls)) return false;
+        return !member.hasModifierProperty(PsiModifier.STATIC);
     }
 }

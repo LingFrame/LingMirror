@@ -31,7 +31,7 @@ import java.util.List;
  */
 public class CardGenerator {
 
-    private static final int CARD_WIDTH = 1400;
+    private static final int CARD_WIDTH = 1100;
     private static final int CARD_HEIGHT = 680;
 
     private static final Color BRAND_CYAN = new Color(100, 200, 255);
@@ -100,7 +100,7 @@ public class CardGenerator {
 
         g.setColor(BRAND_CYAN);
         g.setFont(brandFont);
-        g.drawString("🛡 灵镜 LingMirror", x, y);
+        g.drawString("🪞 灵镜 LingMirror", x, y);
 
         y += 36;
         g.setColor(Color.WHITE);
@@ -120,11 +120,11 @@ public class CardGenerator {
         y += 20;
         if (hasRisk) {
             drawRiskBox(g, x, y, violations, riskTitleFont, riskLabelFont, riskDescFont);
-            y += 90;
+            y += 120;
             drawRiskStats(g, x, y, violations, statLevelFont, statCountFont, statLabelFont);
-            y += 80;
+            y += 120;
             drawReferenceChain(g, x, y, violations, chainTitleFont, chainFont, chainLocFont);
-            y += 160;
+            y += 180;
             drawFixSuggestion(g, x, y, violations, fixTitleFont, fixTextFont);
         } else {
             drawSafeBox(g, x, y, riskTitleFont, riskDescFont);
@@ -134,10 +134,10 @@ public class CardGenerator {
     private static void drawRiskBox(Graphics2D g, int x, int y, List<RuleViolation> violations,
                                     Font titleFont, Font labelFont, Font descFont) {
         g.setColor(RED_BG);
-        g.fillRoundRect(x, y, 680, 70, 8, 8);
+        g.fillRoundRect(x, y, 680, 100, 8, 8);
         g.setColor(RED_BORDER);
         g.setStroke(new BasicStroke(1.5f));
-        g.drawRoundRect(x, y, 680, 70, 8, 8);
+        g.drawRoundRect(x, y, 680, 100, 8, 8);
 
         g.setColor(RED_ACCENT);
         g.setFont(titleFont);
@@ -153,8 +153,8 @@ public class CardGenerator {
                 .filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
         g.setColor(new Color(200, 200, 200));
         g.setFont(descFont);
-        g.drawString("检测到 " + critical + " 条 ClassLoader 锁死路径，在热部署或长时间运行场景中，", x + 16, y + 52);
-        g.drawString("极大概率触发 Metaspace 内存泄漏。", x + 16, y + 66);
+        g.drawString("检测到 " + critical + " 条 ClassLoader 锁死路径，在热部署或长时间运行场景中，", x + 16, y + 60);
+        g.drawString("极大概率触发 Metaspace 内存泄漏。", x + 16, y + 80);
     }
 
     private static void drawSafeBox(Graphics2D g, int x, int y, Font titleFont, Font descFont) {
@@ -170,7 +170,7 @@ public class CardGenerator {
 
         g.setColor(new Color(180, 220, 180));
         g.setFont(descFont);
-        g.drawString("未检测到 ClassLoader 泄漏路径。热部署场景建议引入长期治理机制。", x + 16, y + 56);
+        g.drawString("未检测到 ClassLoader 泄漏路径。热部署场景建议引入长期治理机制。", x + 16, y + 60);
     }
 
     private static void drawRiskStats(Graphics2D g, int x, int y, List<RuleViolation> violations,
@@ -180,11 +180,11 @@ public class CardGenerator {
 
         drawStatBox(g, x, y, "CRITICAL", critical + " 处", "致命问题",
                 RED_BG, RED_ACCENT, levelFont, countFont, labelFont);
-        drawStatBox(g, x + 170, y, "HIGH", high + " 处", "高风险",
+        drawStatBox(g, x + 175, y, "HIGH", high + " 处", "高风险",
                 ORANGE_BG, ORANGE_ACCENT, levelFont, countFont, labelFont);
-        drawStatBox(g, x + 340, y, "MEDIUM", "0 处", "中风险",
+        drawStatBox(g, x + 350, y, "MEDIUM", "0 处", "中风险",
                 new Color(40, 35, 10), new Color(160, 140, 30), levelFont, countFont, labelFont);
-        drawStatBox(g, x + 510, y, "LOW", "0 处", "低风险",
+        drawStatBox(g, x + 525, y, "LOW", "0 处", "低风险",
                 new Color(15, 40, 15), new Color(60, 160, 60), levelFont, countFont, labelFont);
     }
 
@@ -221,9 +221,9 @@ public class CardGenerator {
 
         y += 6;
         g.setColor(CODE_BG);
-        g.fillRoundRect(x, y, 680, 100, 6, 6);
+        g.fillRoundRect(x, y, 680, 150, 6, 6);
         g.setColor(CODE_BORDER);
-        g.drawRoundRect(x, y, 680, 100, 6, 6);
+        g.drawRoundRect(x, y, 680, 150, 6, 6);
 
         g.setFont(chainFont);
         String[] lines = first.getReferenceChain().split("\n");
@@ -279,7 +279,7 @@ public class CardGenerator {
 
             int avatarH = 520;
             int avatarW = (int) ((double) avatar.getWidth() / avatar.getHeight() * avatarH);
-            g.drawImage(avatar, CARD_WIDTH - avatarW - 20, 30, avatarW, avatarH, null);
+            g.drawImage(avatar, CARD_WIDTH - avatarW + 50, 30, avatarW, avatarH, null);
         } catch (IOException e) {
             // 立绘缺失不影响卡片生成
         }
@@ -297,7 +297,6 @@ public class CardGenerator {
         g.setColor(BRAND_CYAN);
         Font brandFont = getCjkFont(Font.BOLD, 13);
         g.setFont(brandFont);
-        g.drawString("灵镜 LingMirror", 750, CARD_HEIGHT - 30);
 
         g.setColor(TEXT_MUTED);
         Font sloganFont = getCjkFont(Font.PLAIN, 11);

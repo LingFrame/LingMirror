@@ -137,7 +137,7 @@ public class ScannerEngine {
             public void visitClass(@NotNull PsiClass aClass) {
                 super.visitClass(aClass);
 
-                if (aClass.isInterface() || aClass.isEnum() || aClass.isAnnotationType()) return;
+                if (aClass.isInterface() || aClass.isAnnotationType()) return;
                 if (aClass.getQualifiedName() == null) return;
 
                 for (LeakDetectionRule rule : rules) {
@@ -193,6 +193,8 @@ public class ScannerEngine {
         list.add(new HI001Rule());
         list.add(new HI002Rule());
         list.add(new HI003Rule());
+        list.add(new HI004Rule());
+        list.add(new HI005Rule());
         return list;
     }
 }

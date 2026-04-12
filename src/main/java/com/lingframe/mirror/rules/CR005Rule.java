@@ -97,9 +97,11 @@ public class CR005Rule implements LeakDetectionRule {
 
             if (!allParamsAreUniversal(typeArgs)) continue;
 
-            List<String> universalTypeNames = extractUniversalTypeNames(typeArgs);
+            if (!hasMutatingOperations(field, psiClass)) continue;
 
-            violations.add(buildViolation(field, psiClass, universalTypeNames));
+            List<String> typeNames = extractTypeNames(typeArgs);
+
+            violations.add(buildViolation(field, psiClass, typeNames));
         }
 
         return violations;
@@ -166,7 +168,7 @@ public class CR005Rule implements LeakDetectionRule {
         return true;
     }
 
-    private List<String> extractUniversalTypeNames(PsiType[] typeArgs) {
+    private List<String> extractTypeNames(PsiType[] typeArgs) {
         List<String> result = new ArrayList<>();
         for (PsiType arg : typeArgs) {
             String canonical = arg.getCanonicalText();
@@ -230,15 +232,15 @@ public class CR005Rule implements LeakDetectionRule {
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass,
-                                         List<String> universalTypes) {
+                                         List<String> typeNames) {
         String location = psiClass.getQualifiedName() + "." + field.getName();
-        String typesStr = String.join(", ", universalTypes);
+        String typesStr = String.join(", ", typeNames);
 
         StringBuilder chainBuilder = new StringBuilder();
         chainBuilder.append("static ").append(field.getName())
                 .append("  ← 全局根节点(永不释放)\n");
         chainBuilder.append("  └─ Collection/Map 元素\n");
-        for (String t : universalTypes) {
+        for (String t : typeNames) {
             chainBuilder.append("       └─ ").append(t).append(" 实例 ← 持续累积\n");
         }
         chainBuilder.append("            └─ 可能间接引用 ClassLoader / 大对象\n");
@@ -268,4 +270,63 @@ public class CR005Rule implements LeakDetectionRule {
                 )
                 .build();
     }
+
+    private boolean hasMutatingOperations(PsiField field, PsiClass psiClass) {
+        String fieldName = field.getName();
+        boolean[] found = {false};
+
+        psiClass.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitClassInitializer(@NotNull PsiClassInitializer initializer) {
+                return;
+            }
+
+            @Override
+            public void visitMethod(@NotNull PsiMethod method) {
+                if (found[0]) return;
+                String name = method.getName();
+                if ("<init>".equals(name)) return;
+                super.visitMethod(method);
+            }
+
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                if (found[0]) return;
+
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                if (qualifier != null && isReferenceToField(qualifier, fieldName)) {
+                    String methodName = expression.getMethodExpression().getReferenceName();
+                    if (isMutatingMethod(methodName)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+
+                super.visitMethodCallExpression(expression);
+            }
+        });
+
+        return found[0];
+    }
+
+    private boolean isReferenceToField(PsiExpression qualifier, String fieldName) {
+        if (qualifier instanceof PsiReferenceExpression) {
+            PsiReferenceExpression ref = (PsiReferenceExpression) qualifier;
+            if (fieldName.equals(ref.getReferenceName())) return true;
+            PsiElement resolved = ref.resolve();
+            if (resolved instanceof PsiField) {
+                return fieldName.equals(((PsiField) resolved).getName());
+            }
+        }
+        return false;
+    }
+
+    private boolean isMutatingMethod(String name) {
+        return "add".equals(name) || "put".equals(name) || "offer".equals(name)
+                || "push".equals(name) || "addFirst".equals(name) || "addLast".equals(name)
+                || "addAll".equals(name) || "putAll".equals(name)
+                || "putIfAbsent".equals(name) || "computeIfAbsent".equals(name)
+                || "compute".equals(name) || "merge".equals(name);
+    }
+
 }
