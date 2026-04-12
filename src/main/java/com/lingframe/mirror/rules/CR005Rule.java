@@ -66,7 +66,7 @@ public class CR005Rule implements LeakDetectionRule {
     @NotNull
     @Override
     public RiskLevel riskLevel() {
-        return RiskLevel.HIGH;
+        return RiskLevel.MEDIUM;
     }
 
     @NotNull
@@ -75,7 +75,9 @@ public class CR005Rule implements LeakDetectionRule {
         List<RuleViolation> violations = new ArrayList<>();
 
         for (PsiField field : psiClass.getFields()) {
-            if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) {
+                if (!psiClass.isEnum()) continue;
+            }
 
             PsiType type = field.getType();
             if (!(type instanceof PsiClassType)) continue;
@@ -87,6 +89,8 @@ public class CR005Rule implements LeakDetectionRule {
             if (!isMapOrCollection(fieldClass)) continue;
 
             if (isWeakReferenceBasedCollection(fieldClass)) continue;
+
+            if (isShadeClass(psiClass)) continue;
 
             PsiType[] typeArgs = classType.getParameters();
             if (typeArgs.length == 0) continue;
@@ -284,8 +288,7 @@ public class CR005Rule implements LeakDetectionRule {
             @Override
             public void visitMethod(@NotNull PsiMethod method) {
                 if (found[0]) return;
-                String name = method.getName();
-                if ("<init>".equals(name)) return;
+                if (method.isConstructor()) return;
                 super.visitMethod(method);
             }
 
@@ -327,6 +330,12 @@ public class CR005Rule implements LeakDetectionRule {
                 || "addAll".equals(name) || "putAll".equals(name)
                 || "putIfAbsent".equals(name) || "computeIfAbsent".equals(name)
                 || "compute".equals(name) || "merge".equals(name);
+    }
+
+    private boolean isShadeClass(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.contains(".shade.");
     }
 
 }

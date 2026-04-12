@@ -132,6 +132,8 @@ public class ScannerEngine {
     private List<RuleViolation> scanFile(PsiFile psiFile, ScanContext context) {
         List<RuleViolation> violations = new ArrayList<>();
 
+        if (isTestSource(psiFile)) return violations;
+
         psiFile.accept(new JavaRecursiveElementVisitor() {
             @Override
             public void visitClass(@NotNull PsiClass aClass) {
@@ -147,6 +149,13 @@ public class ScannerEngine {
         });
 
         return violations;
+    }
+
+    private boolean isTestSource(PsiFile psiFile) {
+        VirtualFile vFile = psiFile.getVirtualFile();
+        if (vFile == null) return false;
+        String path = vFile.getPath();
+        return path.contains("/src/test/") || path.contains("\\src\\test\\");
     }
 
     private String buildProgressMessage(int scanned, int total, int foundCount) {
@@ -195,6 +204,9 @@ public class ScannerEngine {
         list.add(new HI003Rule());
         list.add(new HI004Rule());
         list.add(new HI005Rule());
+        list.add(new LO001Rule());
+        list.add(new LO002Rule());
+        list.add(new LO003Rule());
         return list;
     }
 }

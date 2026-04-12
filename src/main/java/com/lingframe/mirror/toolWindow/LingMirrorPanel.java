@@ -59,6 +59,8 @@ public class LingMirrorPanel {
 
     private static final Color CRITICAL_COLOR = new JBColor(new Color(220, 53, 69), new Color(200, 60, 70));
     private static final Color HIGH_COLOR = new JBColor(new Color(255, 153, 0), new Color(230, 140, 0));
+    private static final Color MEDIUM_COLOR = new JBColor(new Color(255, 193, 7), new Color(230, 175, 20));
+    private static final Color LOW_COLOR = new JBColor(new Color(108, 117, 125), new Color(140, 150, 160));
     private static final Color SAFE_GREEN = new JBColor(new Color(40, 167, 69), new Color(60, 180, 80));
     private static final Color CARD_BG = UIUtil.getPanelBackground();
     private static final Color CARD_BORDER = JBColor.border();
@@ -354,7 +356,11 @@ public class LingMirrorPanel {
     private void renderViolations(List<RuleViolation> violations) {
         long criticalCount = violations.stream()
                 .filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
-        long highCount = violations.size() - criticalCount;
+        long highCount = violations.stream()
+                .filter(v -> v.getRiskLevel() == RiskLevel.HIGH).count();
+        long mediumCount = violations.stream()
+                .filter(v -> v.getRiskLevel() == RiskLevel.MEDIUM).count();
+        long lowCount = violations.size() - criticalCount - highCount - mediumCount;
 
         JPanel summaryBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         summaryBar.setOpaque(false);
@@ -363,12 +369,18 @@ public class LingMirrorPanel {
         JLabel alertIcon = new JLabel("⚠");
         alertIcon.setFont(alertIcon.getFont().deriveFont(Font.BOLD, 15f));
 
-        JBLabel summaryText = new JBLabel(String.format(
-                "<html>发现 <b style='color:%s'>%d</b> 处致命 · "
-                        + "<b style='color:%s'>%d</b> 处高危 · 共 %d 处 ClassLoader 泄漏路径",
-                toHex(CRITICAL_COLOR), criticalCount,
-                toHex(HIGH_COLOR), highCount,
-                violations.size()));
+        StringBuilder sb = new StringBuilder("<html>发现 ");
+        sb.append(String.format("<b style='color:%s'>%d</b> 处致命 · ", toHex(CRITICAL_COLOR), criticalCount));
+        sb.append(String.format("<b style='color:%s'>%d</b> 处高危 · ", toHex(HIGH_COLOR), highCount));
+        if (mediumCount > 0) {
+            sb.append(String.format("<b style='color:%s'>%d</b> 处中危 · ", toHex(MEDIUM_COLOR), mediumCount));
+        }
+        if (lowCount > 0) {
+            sb.append(String.format("<b style='color:%s'>%d</b> 处低风险 · ", toHex(LOW_COLOR), lowCount));
+        }
+        sb.append(String.format("共 %d 处 ClassLoader 泄漏路径", violations.size()));
+
+        JBLabel summaryText = new JBLabel(sb.toString());
         summaryText.setFont(summaryText.getFont().deriveFont(Font.PLAIN, 13.5f));
 
         summaryBar.add(alertIcon);
@@ -406,8 +418,21 @@ public class LingMirrorPanel {
     }
 
     private JPanel buildViolationCard(RuleViolation v) {
-        boolean isCritical = v.getRiskLevel() == RiskLevel.CRITICAL;
-        Color accentColor = isCritical ? CRITICAL_COLOR : HIGH_COLOR;
+        Color accentColor;
+        String badgeText;
+        if (v.getRiskLevel() == RiskLevel.CRITICAL) {
+            accentColor = CRITICAL_COLOR;
+            badgeText = "致命";
+        } else if (v.getRiskLevel() == RiskLevel.HIGH) {
+            accentColor = HIGH_COLOR;
+            badgeText = "高危";
+        } else if (v.getRiskLevel() == RiskLevel.MEDIUM) {
+            accentColor = MEDIUM_COLOR;
+            badgeText = "中危";
+        } else {
+            accentColor = LOW_COLOR;
+            badgeText = "低风险";
+        }
 
         JPanel card = buildCardPanel(accentColor);
         card.setLayout(new BorderLayout(0, 8));
@@ -422,7 +447,7 @@ public class LingMirrorPanel {
         JPanel ruleInfo = new JPanel(new BorderLayout(6, 0));
         ruleInfo.setOpaque(false);
 
-        JLabel badge = new JLabel(isCritical ? "致命" : "高危");
+        JLabel badge = new JLabel(badgeText);
         badge.setForeground(Color.WHITE);
         badge.setBackground(accentColor);
         badge.setOpaque(true);
@@ -450,7 +475,7 @@ public class LingMirrorPanel {
         titleRow.add(ruleInfo, BorderLayout.CENTER);
         titleRow.add(jumpBtn, BorderLayout.EAST);
 
-        JPanel chainPanel = buildChainPanel(v.getReferenceChain(), isCritical);
+        JPanel chainPanel = buildChainPanel(v.getReferenceChain(), accentColor);
         chainPanel.setBackground(UIUtil.getTextFieldBackground());
         chainPanel.setBorder(JBUI.Borders.empty(8, 12, 8, 12));
 
@@ -468,7 +493,7 @@ public class LingMirrorPanel {
         return card;
     }
 
-    private JPanel buildChainPanel(String chainText, boolean isCritical) {
+    private JPanel buildChainPanel(String chainText, Color accentColor) {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         String[] lines = chainText.split("\n");
@@ -496,7 +521,7 @@ public class LingMirrorPanel {
             nodeLabel.setFont(nodeFont);
 
             if (isLeaf) {
-                nodeLabel.setForeground(isCritical ? CRITICAL_COLOR : HIGH_COLOR);
+                nodeLabel.setForeground(accentColor);
             } else if (isHiddenRef) {
                 nodeLabel.setForeground(new JBColor(new Color(180, 100, 100), new Color(200, 120, 120)));
             } else {

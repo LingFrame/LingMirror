@@ -40,7 +40,7 @@ public class CR007Rule implements LeakDetectionRule {
     @NotNull
     @Override
     public RiskLevel riskLevel() {
-        return RiskLevel.HIGH;
+        return RiskLevel.MEDIUM;
     }
 
     @NotNull
@@ -65,6 +65,8 @@ public class CR007Rule implements LeakDetectionRule {
             if (referencedClass == null) continue;
 
             if (isJdkType(referencedClass)) continue;
+
+            if (isShadeClass(psiClass) || isShadeClass(referencedClass)) continue;
 
             if (referencedClass.equals(psiClass)) continue;
 
@@ -160,6 +162,12 @@ public class CR007Rule implements LeakDetectionRule {
                 || qName.startsWith("sun.")
                 || qName.startsWith("org.w3c.")
                 || qName.startsWith("org.xml.");
+    }
+
+    private boolean isShadeClass(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.contains(".shade.");
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass,

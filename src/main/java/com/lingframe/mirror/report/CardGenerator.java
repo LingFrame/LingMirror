@@ -109,7 +109,7 @@ public class CardGenerator {
 
         g.setColor(BRAND_CYAN);
         g.setFont(subtitleFont);
-        g.drawString("· 照见运行时边界隐患", x + 430, y);
+        g.drawString("· 让隐患无所遁形", x + 430, y);
 
         y += 28;
         g.setColor(TEXT_DIM);
@@ -177,15 +177,17 @@ public class CardGenerator {
                                       Font levelFont, Font countFont, Font labelFont) {
         long critical = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
         long high = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.HIGH).count();
+        long medium = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.MEDIUM).count();
+        long low = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.LOW).count();
 
         drawStatBox(g, x, y, "CRITICAL", critical + " 处", "致命问题",
                 RED_BG, RED_ACCENT, levelFont, countFont, labelFont);
         drawStatBox(g, x + 175, y, "HIGH", high + " 处", "高风险",
                 ORANGE_BG, ORANGE_ACCENT, levelFont, countFont, labelFont);
-        drawStatBox(g, x + 350, y, "MEDIUM", "0 处", "中风险",
+        drawStatBox(g, x + 350, y, "MEDIUM", medium + " 处", "中风险",
                 new Color(40, 35, 10), new Color(160, 140, 30), levelFont, countFont, labelFont);
-        drawStatBox(g, x + 525, y, "LOW", "0 处", "低风险",
-                new Color(15, 40, 15), new Color(60, 160, 60), levelFont, countFont, labelFont);
+        drawStatBox(g, x + 525, y, "LOW", low + " 处", "低风险",
+                new Color(30, 30, 35), new Color(120, 130, 140), levelFont, countFont, labelFont);
     }
 
     private static void drawStatBox(Graphics2D g, int x, int y,
@@ -301,7 +303,6 @@ public class CardGenerator {
         g.setColor(TEXT_MUTED);
         Font sloganFont = getCjkFont(Font.PLAIN, 11);
         g.setFont(sloganFont);
-        g.drawString("照见运行时边界隐患", 750, CARD_HEIGHT - 15);
     }
 
     /**

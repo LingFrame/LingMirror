@@ -5,7 +5,9 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * CR-004: 静态单例持有内部集合.
@@ -58,10 +60,19 @@ public class CR004Rule implements LeakDetectionRule {
 
             if (isMapOrCollection(fieldTypeClass)) continue;
 
+            if (isForeignLibraryType(psiClass, fieldTypeClass)) continue;
+
+            if (isShadeType(fieldTypeClass)) continue;
+
+            if (isBuilderClass(fieldTypeClass)) continue;
+
+            if ("DEFAULT_INSTANCE".equals(field.getName())) continue;
+
             List<String> collectionFields = findCollectionFields(fieldTypeClass);
             if (collectionFields.isEmpty()) continue;
 
             for (String collectionField : collectionFields) {
+                if (!hasMutatingOperations(fieldTypeClass, collectionField)) continue;
                 violations.add(buildSingleViolation(field, psiClass, fieldTypeClass, collectionField));
             }
         }
@@ -78,6 +89,37 @@ public class CR004Rule implements LeakDetectionRule {
                 || qName.startsWith("sun.")
                 || qName.startsWith("org.w3c.")
                 || qName.startsWith("org.xml.");
+    }
+
+    private boolean isForeignLibraryType(PsiClass fieldOwner, PsiClass fieldType) {
+        String ownerPkg = getTopPackage(fieldOwner.getQualifiedName(), 3);
+        String typePkg = getTopPackage(fieldType.getQualifiedName(), 3);
+        if (ownerPkg == null || typePkg == null) return false;
+        return !ownerPkg.equals(typePkg);
+    }
+
+    private boolean isShadeType(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.contains(".shade.");
+    }
+
+    private boolean isBuilderClass(PsiClass psiClass) {
+        String name = psiClass.getName();
+        if (name == null) return false;
+        return name.endsWith("Builder");
+    }
+
+    private String getTopPackage(String qName, int segments) {
+        if (qName == null) return null;
+        String[] parts = qName.split("\\.");
+        if (parts.length <= segments) return qName;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < segments; i++) {
+            if (i > 0) sb.append('.');
+            sb.append(parts[i]);
+        }
+        return sb.toString();
     }
 
     private boolean isMapOrCollection(PsiClass psiClass) {
@@ -114,11 +156,110 @@ public class CR004Rule implements LeakDetectionRule {
             if (resolved == null) continue;
 
             if (isMapOrCollection(resolved) || implementsMapOrCollection(resolved)) {
+                if (!hasCustomTypeParam((PsiClassType) fieldType)) continue;
                 collectionFields.add(instanceField.getName());
             }
         }
 
         return collectionFields;
+    }
+
+    private boolean hasCustomTypeParam(PsiClassType collectionType) {
+        PsiType[] typeArgs = collectionType.getParameters();
+        if (typeArgs.length == 0) return true;
+
+        for (PsiType arg : typeArgs) {
+            if (containsCustomType(arg)) return true;
+        }
+        return false;
+    }
+
+    private boolean containsCustomType(PsiType type) {
+        if (!(type instanceof PsiClassType)) return false;
+        PsiClassType classType = (PsiClassType) type;
+        PsiClass cls = classType.resolve();
+        if (cls == null) return false;
+        String qName = cls.getQualifiedName();
+        if (qName == null) return false;
+
+        if (isUniversalType(qName)) return false;
+        if (qName.startsWith("java.") || qName.startsWith("javax.")) {
+            PsiType[] innerArgs = classType.getParameters();
+            for (PsiType inner : innerArgs) {
+                if (containsCustomType(inner)) return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static final Set<String> UNIVERSAL_TYPES = new HashSet<>();
+    static {
+        Collections.addAll(UNIVERSAL_TYPES,
+                "java.lang.Object", "java.lang.String",
+                "java.lang.Integer", "java.lang.Long",
+                "java.lang.Byte", "java.lang.Short",
+                "java.lang.Character", "java.lang.Float",
+                "java.lang.Double", "java.lang.Boolean",
+                "java.lang.Number");
+    }
+
+    private boolean isUniversalType(String qName) {
+        return UNIVERSAL_TYPES.contains(qName);
+    }
+
+    private boolean hasMutatingOperations(PsiClass targetClass, String collectionFieldName) {
+        boolean[] found = {false};
+        targetClass.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitClassInitializer(@NotNull PsiClassInitializer initializer) {
+                return;
+            }
+
+            @Override
+            public void visitMethod(@NotNull PsiMethod method) {
+                if (found[0]) return;
+                if (method.isConstructor()) return;
+                if ("<clinit>".equals(method.getName())) return;
+                super.visitMethod(method);
+            }
+
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                if (found[0]) return;
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                if (qualifier != null && isReferenceToField(qualifier, collectionFieldName)) {
+                    String methodName = expression.getMethodExpression().getReferenceName();
+                    if (isMutatingMethod(methodName)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+                super.visitMethodCallExpression(expression);
+            }
+        });
+        return found[0];
+    }
+
+    private boolean isReferenceToField(PsiExpression qualifier, String fieldName) {
+        if (qualifier instanceof PsiReferenceExpression) {
+            PsiReferenceExpression ref = (PsiReferenceExpression) qualifier;
+            if (fieldName.equals(ref.getReferenceName())) return true;
+            PsiElement resolved = ref.resolve();
+            if (resolved instanceof PsiField) {
+                return fieldName.equals(((PsiField) resolved).getName());
+            }
+        }
+        return false;
+    }
+
+    private boolean isMutatingMethod(String name) {
+        return "add".equals(name) || "put".equals(name) || "offer".equals(name)
+                || "push".equals(name) || "addFirst".equals(name) || "addLast".equals(name)
+                || "addAll".equals(name) || "putAll".equals(name)
+                || "putIfAbsent".equals(name) || "computeIfAbsent".equals(name)
+                || "compute".equals(name) || "merge".equals(name)
+                || "register".equals(name) || "subscribe".equals(name);
     }
 
     private boolean implementsMapOrCollection(PsiClass psiClass) {

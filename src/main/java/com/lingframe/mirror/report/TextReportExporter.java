@@ -7,8 +7,10 @@ import com.lingframe.mirror.rules.RuleViolation;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileFilter;
 import java.awt.*;
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -50,9 +52,9 @@ public class TextReportExporter {
     private static final String LAST_EXPORT_DIR_KEY = "lingmirror.last.export.dir";
 
     public static void exportToFile(@NotNull Project project,
-                                     @NotNull List<RuleViolation> violations) {
+                                    @NotNull List<RuleViolation> violations) {
         String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String defaultName = "lingmirror-report-" + time + ".txt";
+        String defaultName = project.getName() + "-report-" + time + ".txt";
 
         Preferences prefs = Preferences.userNodeForPackage(TextReportExporter.class);
         String lastDir = prefs.get(LAST_EXPORT_DIR_KEY, null);
@@ -60,10 +62,10 @@ public class TextReportExporter {
 
         JFileChooser fileChooser = new JFileChooser(defaultDir.toFile());
         fileChooser.setDialogTitle("导出灵镜扫描报告");
-        fileChooser.setSelectedFile(new java.io.File(defaultDir.toFile(), defaultName));
-        fileChooser.setFileFilter(new javax.swing.filechooser.FileFilter() {
+        fileChooser.setSelectedFile(new File(defaultDir.toFile(), defaultName));
+        fileChooser.setFileFilter(new FileFilter() {
             @Override
-            public boolean accept(java.io.File f) {
+            public boolean accept(File f) {
                 return f.isDirectory() || f.getName().endsWith(".txt");
             }
 
@@ -76,9 +78,9 @@ public class TextReportExporter {
         int result = fileChooser.showSaveDialog(null);
         if (result != JFileChooser.APPROVE_OPTION) return;
 
-        java.io.File selectedFile = fileChooser.getSelectedFile();
+        File selectedFile = fileChooser.getSelectedFile();
         if (!selectedFile.getName().endsWith(".txt")) {
-            selectedFile = new java.io.File(selectedFile.getParent(), selectedFile.getName() + ".txt");
+            selectedFile = new File(selectedFile.getParent(), selectedFile.getName() + ".txt");
         }
 
         String report = generateReport(project.getName(), violations);
@@ -103,7 +105,7 @@ public class TextReportExporter {
     }
 
     public static String generateReport(@NotNull String projectName,
-                                          @NotNull List<RuleViolation> violations) {
+                                        @NotNull List<RuleViolation> violations) {
         StringBuilder sb = new StringBuilder();
 
         String separator = "============================================";
@@ -118,15 +120,25 @@ public class TextReportExporter {
 
         long criticalCount = violations.stream()
                 .filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
-        long highCount = violations.size() - criticalCount;
+        long highCount = violations.stream()
+                .filter(v -> v.getRiskLevel() == RiskLevel.HIGH).count();
+        long mediumCount = violations.stream()
+                .filter(v -> v.getRiskLevel() == RiskLevel.MEDIUM).count();
+        long lowCount = violations.size() - criticalCount - highCount - mediumCount;
 
         if (violations.isEmpty()) {
             sb.append("扫描结果: 未发现 ClassLoader 泄漏路径\n");
         } else {
             sb.append("扫描结果: 发现 ")
                     .append(criticalCount).append(" 处致命 · ")
-                    .append(highCount).append(" 处高危 · 共 ")
-                    .append(violations.size()).append(" 处泄漏路径\n");
+                    .append(highCount).append(" 处高危");
+            if (mediumCount > 0) {
+                sb.append(" · ").append(mediumCount).append(" 处中危");
+            }
+            if (lowCount > 0) {
+                sb.append(" · ").append(lowCount).append(" 处低风险");
+            }
+            sb.append(" · 共 ").append(violations.size()).append(" 处泄漏路径\n");
         }
 
         sb.append("\n");
@@ -142,7 +154,16 @@ public class TextReportExporter {
 
         for (int i = 0; i < violations.size(); i++) {
             RuleViolation v = violations.get(i);
-            String riskLabel = v.getRiskLevel() == RiskLevel.CRITICAL ? "致命" : "高危";
+            String riskLabel;
+            if (v.getRiskLevel() == RiskLevel.CRITICAL) {
+                riskLabel = "致命";
+            } else if (v.getRiskLevel() == RiskLevel.HIGH) {
+                riskLabel = "高危";
+            } else if (v.getRiskLevel() == RiskLevel.MEDIUM) {
+                riskLabel = "中危";
+            } else {
+                riskLabel = "低风险";
+            }
 
             sb.append(divider).append("\n");
             sb.append("[").append(i + 1).append("] ")

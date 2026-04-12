@@ -5,7 +5,9 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * CR-003: 静态集合持有自定义类型实例.
@@ -48,7 +50,9 @@ public class CR003Rule implements LeakDetectionRule {
         List<RuleViolation> violations = new ArrayList<>();
 
         for (PsiField field : psiClass.getFields()) {
-            if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) {
+                if (!psiClass.isEnum()) continue;
+            }
 
             PsiType type = field.getType();
             if (!(type instanceof PsiClassType)) continue;
@@ -59,8 +63,12 @@ public class CR003Rule implements LeakDetectionRule {
 
             if (!isMapOrCollection(fieldClass)) continue;
 
+            if (isShadeClass(psiClass)) continue;
+
             List<String> customTypes = findCustomTypeParams(classType);
             if (customTypes.isEmpty()) continue;
+
+            if (isImmutableConstantField(field, psiClass)) continue;
 
             violations.add(buildViolation(field, psiClass, customTypes));
         }
@@ -185,6 +193,68 @@ public class CR003Rule implements LeakDetectionRule {
         int dot = canonical.lastIndexOf('.');
         if (dot >= 0) return canonical.substring(dot + 1);
         return canonical;
+    }
+
+    private boolean isShadeClass(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.contains(".shade.");
+    }
+
+    private boolean isImmutableConstantField(PsiField field, PsiClass psiClass) {
+        if (!field.hasModifierProperty(PsiModifier.FINAL)) return false;
+
+        String fieldName = field.getName();
+        boolean[] hasMutation = {false};
+        psiClass.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitClassInitializer(@NotNull PsiClassInitializer initializer) {
+                return;
+            }
+
+            @Override
+            public void visitMethod(@NotNull PsiMethod method) {
+                if (hasMutation[0]) return;
+                if (method.isConstructor()) return;
+                if ("<clinit>".equals(method.getName())) return;
+                super.visitMethod(method);
+            }
+
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                if (hasMutation[0]) return;
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                if (qualifier != null && isReferenceToField(qualifier, fieldName)) {
+                    String methodName = expression.getMethodExpression().getReferenceName();
+                    if (MUTATING_METHODS.contains(methodName)) {
+                        hasMutation[0] = true;
+                        return;
+                    }
+                }
+                super.visitMethodCallExpression(expression);
+            }
+        });
+        return !hasMutation[0];
+    }
+
+    private boolean isReferenceToField(PsiExpression qualifier, String fieldName) {
+        if (qualifier instanceof PsiReferenceExpression) {
+            PsiReferenceExpression ref = (PsiReferenceExpression) qualifier;
+            if (fieldName.equals(ref.getReferenceName())) return true;
+            PsiElement resolved = ref.resolve();
+            if (resolved instanceof PsiField) {
+                return fieldName.equals(((PsiField) resolved).getName());
+            }
+        }
+        return false;
+    }
+
+    private static final Set<String> MUTATING_METHODS = new HashSet<>();
+    static {
+        Collections.addAll(MUTATING_METHODS,
+                "add", "put", "offer", "push", "addFirst", "addLast",
+                "addAll", "putAll", "putIfAbsent", "computeIfAbsent",
+                "compute", "merge", "register", "subscribe");
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass, List<String> customTypes) {
