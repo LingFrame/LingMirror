@@ -75,6 +75,8 @@ public class LO003Rule implements LeakDetectionRule {
 
             if (isJdkImmutableType(fieldTypeClass)) continue;
 
+            if (isJdkType(fieldTypeClass)) continue;
+
             if (isMapOrCollection(fieldTypeClass)) {
                 if (hasMutatingOperations(psiClass, field.getName())) {
                     violations.add(buildViolation(field, psiClass, fieldTypeClass, true));
@@ -83,11 +85,6 @@ public class LO003Rule implements LeakDetectionRule {
             }
 
             if (!field.hasModifierProperty(PsiModifier.FINAL)) {
-                violations.add(buildViolation(field, psiClass, fieldTypeClass, false));
-                continue;
-            }
-
-            if (!isJdkType(fieldTypeClass)) {
                 violations.add(buildViolation(field, psiClass, fieldTypeClass, false));
             }
         }
@@ -110,6 +107,15 @@ public class LO003Rule implements LeakDetectionRule {
                 || qName.equals("java.lang.Number");
     }
 
+    private boolean isJdkType(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.startsWith("java.")
+                || qName.startsWith("javax.")
+                || qName.startsWith("com.sun.")
+                || qName.startsWith("sun.");
+    }
+
     private boolean isMapOrCollection(PsiClass psiClass) {
         String qName = psiClass.getQualifiedName();
         if (qName == null) return false;
@@ -129,15 +135,6 @@ public class LO003Rule implements LeakDetectionRule {
                 || qName.startsWith("java.util.LinkedHashSet")
                 || qName.startsWith("java.util.TreeSet")
                 || qName.startsWith("java.util.concurrent.CopyOnWriteArrayList");
-    }
-
-    private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.");
     }
 
     private boolean hasMutatingOperations(PsiClass psiClass, String fieldName) {

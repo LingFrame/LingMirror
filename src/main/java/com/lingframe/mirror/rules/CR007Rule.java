@@ -77,7 +77,15 @@ public class CR007Rule implements LeakDetectionRule {
             if (reportedRings.contains(ringKey)) continue;
 
             reportedRings.add(ringKey);
-            violations.add(buildViolation(field, psiClass, referencedClass, backRefPath));
+
+            // 判定有效风险等级：若环形引用两端均为单例/基础设施类，则降级为低风险
+            // （如 SeaTunnelServer <-> CoordinatorService，生命周期相同，不会泄漏）
+            RiskLevel effectiveRisk = riskLevel();
+            if (isSingletonLike(psiClass) && isSingletonLike(referencedClass)) {
+                effectiveRisk = RiskLevel.LOW;
+            }
+
+            violations.add(buildViolation(field, psiClass, referencedClass, backRefPath, effectiveRisk));
         }
 
         return violations;
@@ -166,12 +174,74 @@ public class CR007Rule implements LeakDetectionRule {
 
     private boolean isShadeClass(PsiClass psiClass) {
         String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
+        if (qName != null && qName.contains(".shade.")) return true;
+        PsiFile file = psiClass.getContainingFile();
+        if (file == null) return false;
+        String path = file.getVirtualFile().getPath();
+        return path.contains("-shade/") || path.contains("-shade\\");
+    }
+
+    /**
+     * 启发式判断：检查类是否为单例/基础设施类（生命周期 = JVM）.
+     * 单例类之间的环形引用不会导致泄漏，因为两端对象在整个 JVM 生命周期内存活.
+     *
+     * <p>判断依据：
+     * - 拥有 static INSTANCE 字段
+     * - 拥有 static getInstance() 方法
+     * - 实现 ManagedService / Service 接口（Hazelcast 模式）
+     * - 类名以 Service/Manager/Server/Engine/Registry 结尾
+     */
+    private boolean isSingletonLike(PsiClass psiClass) {
+        // 检查 static INSTANCE 字段
+        for (PsiField field : psiClass.getFields()) {
+            if (field.hasModifierProperty(PsiModifier.STATIC)) {
+                String name = field.getName();
+                if ("INSTANCE".equals(name) || "instance".equals(name)
+                        || "SINGLETON".equals(name) || "singleton".equals(name)) {
+                    return true;
+                }
+            }
+        }
+
+        // 检查 static getInstance() 方法
+        for (PsiMethod method : psiClass.getMethods()) {
+            if (method.hasModifierProperty(PsiModifier.STATIC)) {
+                String name = method.getName();
+                if ("getInstance".equals(name) || "instance".equals(name)
+                        || "getSingleton".equals(name)) {
+                    return true;
+                }
+            }
+        }
+
+        // 检查 ManagedService 类接口
+        for (PsiClass iface : psiClass.getInterfaces()) {
+            String ifaceName = iface.getName();
+            if (ifaceName != null && (ifaceName.contains("ManagedService")
+                    || ifaceName.contains("Service")
+                    || ifaceName.contains("Singleton"))) {
+                return true;
+            }
+        }
+
+        // 按类名模式判断基础设施单例
+        String className = psiClass.getName();
+        if (className != null) {
+            return className.endsWith("Service")
+                    || className.endsWith("Manager")
+                    || className.endsWith("Server")
+                    || className.endsWith("Engine")
+                    || className.endsWith("Registry")
+                    || className.endsWith("System")
+                    || className.endsWith("Context");
+        }
+
+        return false;
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass,
-                                          PsiClass referencedClass, String backRefPath) {
+                                          PsiClass referencedClass, String backRefPath,
+                                          RiskLevel effectiveRisk) {
         String location = psiClass.getQualifiedName() + "." + field.getName();
 
         StringBuilder chainBuilder = new StringBuilder();
@@ -185,9 +255,15 @@ public class CR007Rule implements LeakDetectionRule {
         String description = psiClass.getName() + "." + field.getName()
                 + " 引用 " + referencedClass.getName() + " 实例, 而 "
                 + referencedClass.getName() + " 通过 " + backRefPath
-                + " 又引用回 " + psiClass.getName() + ", 形成环形引用. "
-                + "当这些对象被静态集合持有(如缓存/注册表)时, 环形引用会阻止整个对象图被 GC 回收, "
-                + "即使集合中只持有其中一个对象, 环上的所有对象都无法释放.";
+                + " 又引用回 " + psiClass.getName() + ", 形成环形引用. ";
+
+        if (effectiveRisk == RiskLevel.LOW) {
+            description += "但两端均为单例/基础设施类(生命周期=JVM), 环形引用不会导致\"本该回收但无法回收\"的泄漏, "
+                    + "仅作为架构设计提示保留.";
+        } else {
+            description += "当这些对象被静态集合持有(如缓存/注册表)时, 环形引用会阻止整个对象图被 GC 回收, "
+                    + "即使集合中只持有其中一个对象, 环上的所有对象都无法释放.";
+        }
 
         String fixSuggestion = "1. 打破环形引用: 使用 WeakReference 持有一端的引用; "
                 + "2. 在生命周期结束时, 主动将环形引用链上的字段置 null; "
@@ -197,7 +273,7 @@ public class CR007Rule implements LeakDetectionRule {
         return RuleViolation.builder()
                 .ruleId(ruleId())
                 .ruleName(ruleName())
-                .riskLevel(riskLevel())
+                .riskLevel(effectiveRisk)
                 .location(location)
                 .referenceChain(chainBuilder.toString())
                 .description(description)

@@ -126,9 +126,10 @@ public class RuleViolation {
 
         public RuleViolation build() {
             if (ruleId == null || ruleName == null || riskLevel == null
-                    || location == null || referenceChain == null
+                    || location == null || referenceChain == null || referenceChain.trim().isEmpty()
                     || description == null || fixSuggestion == null) {
-                throw new IllegalStateException("RuleViolation 必填字段不完整: ruleId=" + ruleId);
+                throw new IllegalStateException("RuleViolation 必填字段不完整: ruleId=" + ruleId
+                        + ", referenceChain=" + (referenceChain == null ? "null" : (referenceChain.trim().isEmpty() ? "blank" : "ok")));
             }
             return new RuleViolation(this);
         }

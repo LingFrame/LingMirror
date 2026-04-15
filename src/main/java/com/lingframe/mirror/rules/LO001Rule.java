@@ -78,6 +78,8 @@ public class LO001Rule implements LeakDetectionRule {
 
             if (hasInternalCollection(fieldTypeClass)) continue;
 
+            if (isStatelessSingleton(fieldTypeClass)) continue;
+
             violations.add(buildViolation(field, psiClass, fieldTypeClass));
         }
 
@@ -163,6 +165,38 @@ public class LO001Rule implements LeakDetectionRule {
         String name = psiClass.getName();
         if (name == null) return false;
         return name.endsWith("Builder");
+    }
+
+    private boolean isStatelessSingleton(PsiClass psiClass) {
+        PsiField[] fields = psiClass.getFields();
+        if (fields.length == 0) return true;
+
+        for (PsiField f : fields) {
+            if (f.hasModifierProperty(PsiModifier.STATIC)) continue;
+            PsiType t = f.getType();
+            if (t instanceof PsiPrimitiveType) continue;
+            if (isImmutableType(t)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isImmutableType(PsiType type) {
+        String canonical = type.getCanonicalText();
+        return canonical.startsWith("java.lang.String")
+                || canonical.startsWith("java.lang.Integer")
+                || canonical.startsWith("java.lang.Long")
+                || canonical.startsWith("java.lang.Double")
+                || canonical.startsWith("java.lang.Float")
+                || canonical.startsWith("java.lang.Boolean")
+                || canonical.startsWith("java.lang.Character")
+                || canonical.startsWith("java.lang.Byte")
+                || canonical.startsWith("java.lang.Short")
+                || canonical.startsWith("java.math.BigDecimal")
+                || canonical.startsWith("java.math.BigInteger")
+                || canonical.startsWith("java.util.UUID")
+                || canonical.startsWith("java.time.")
+                || canonical.startsWith("java.util.Optional");
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass, PsiClass fieldTypeClass) {

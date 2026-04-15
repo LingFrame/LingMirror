@@ -179,8 +179,13 @@ public class TextReportExporter {
             }
 
             sb.append("引用链:\n");
-            for (String line : v.getReferenceChain().split("\n")) {
-                sb.append("  ").append(line).append("\n");
+            String refChain = v.getReferenceChain();
+            if (refChain == null || refChain.trim().isEmpty()) {
+                sb.append("  (引用链信息缺失)\n");
+            } else {
+                for (String line : refChain.split("\n")) {
+                    sb.append("  ").append(line).append("\n");
+                }
             }
 
             sb.append("描述: ").append(v.getDescription()).append("\n");

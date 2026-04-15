@@ -51,6 +51,19 @@ public class CR005Rule implements LeakDetectionRule {
             "float[]", "double[]", "char[]", "boolean[]",
     };
 
+    private static final String[] SAFE_CLASSLOADER_TYPES = {
+            "java.lang.String",
+            "java.lang.Integer",
+            "java.lang.Long",
+            "java.lang.Byte",
+            "java.lang.Short",
+            "java.lang.Character",
+            "java.lang.Float",
+            "java.lang.Double",
+            "java.lang.Boolean",
+            "java.lang.Number",
+    };
+
     @NotNull
     @Override
     public String ruleId() {
@@ -240,6 +253,8 @@ public class CR005Rule implements LeakDetectionRule {
         String location = psiClass.getQualifiedName() + "." + field.getName();
         String typesStr = String.join(", ", typeNames);
 
+        RiskLevel actualRisk = determineRiskLevel(typeNames);
+
         StringBuilder chainBuilder = new StringBuilder();
         chainBuilder.append("static ").append(field.getName())
                 .append("  ← 全局根节点(永不释放)\n");
@@ -247,13 +262,25 @@ public class CR005Rule implements LeakDetectionRule {
         for (String t : typeNames) {
             chainBuilder.append("       └─ ").append(t).append(" 实例 ← 持续累积\n");
         }
-        chainBuilder.append("            └─ 可能间接引用 ClassLoader / 大对象\n");
+        if (actualRisk == RiskLevel.LOW) {
+            chainBuilder.append("            └─ 堆内存持续增长(元素类型不会钉住 ClassLoader)\n");
+        } else {
+            chainBuilder.append("            └─ 可能间接引用 ClassLoader / 大对象\n");
+        }
 
-        String description = "静态集合字段 " + field.getName()
-                + " 的泛型参数为通用包装类型 (" + typesStr + "). "
-                + "这类集合容易被用作无界缓存或引用堆积点, "
-                + "持续添加元素但不清理, 导致内存持续增长. "
-                + "即使单个元素看起来很小(如 Object/String), 累积后也会造成严重泄漏.";
+        String description;
+        if (actualRisk == RiskLevel.LOW) {
+            description = "静态集合字段 " + field.getName()
+                    + " 的泛型参数为通用包装类型 (" + typesStr + "). "
+                    + "这些类型由 Bootstrap ClassLoader 加载, 不会导致 ClassLoader 泄漏, "
+                    + "但集合无界增长仍可能导致堆内存溢出.";
+        } else {
+            description = "静态集合字段 " + field.getName()
+                    + " 的泛型参数为通用包装类型 (" + typesStr + "). "
+                    + "这类集合容易被用作无界缓存或引用堆积点, "
+                    + "持续添加元素但不清理, 导致内存持续增长. "
+                    + "即使单个元素看起来很小(如 Object/String), 累积后也会造成严重泄漏.";
+        }
 
         String fixSuggestion = "1. 使用有界集合(如 Guava Cache.evictBySize)限制最大容量; "
                 + "2. 定期清理过期条目(如定时任务清除); "
@@ -263,7 +290,7 @@ public class CR005Rule implements LeakDetectionRule {
         return RuleViolation.builder()
                 .ruleId(ruleId())
                 .ruleName(ruleName())
-                .riskLevel(riskLevel())
+                .riskLevel(actualRisk)
                 .location(location)
                 .referenceChain(chainBuilder.toString())
                 .description(description)
@@ -273,6 +300,22 @@ public class CR005Rule implements LeakDetectionRule {
                         field.getTextOffset()
                 )
                 .build();
+    }
+
+    private RiskLevel determineRiskLevel(List<String> typeNames) {
+        for (String typeName : typeNames) {
+            if (typeName.startsWith("java.lang.Object")) return RiskLevel.MEDIUM;
+            if (isPrimitiveArray(typeName)) continue;
+            boolean isSafeType = false;
+            for (String safe : SAFE_CLASSLOADER_TYPES) {
+                if (typeName.equals(safe) || typeName.startsWith(safe + "<")) {
+                    isSafeType = true;
+                    break;
+                }
+            }
+            if (!isSafeType) return RiskLevel.MEDIUM;
+        }
+        return RiskLevel.LOW;
     }
 
     private boolean hasMutatingOperations(PsiField field, PsiClass psiClass) {
