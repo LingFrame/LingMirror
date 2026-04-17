@@ -1,6 +1,8 @@
 package com.lingframe.mirror.toolWindow;
 
 import com.intellij.ide.BrowserUtil;
+import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.markup.*;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.module.Module;
@@ -10,10 +12,12 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.ui.ColorUtil;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.*;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
+import com.lingframe.mirror.config.SuppressionStore;
 import com.lingframe.mirror.report.CardGenerator;
 import com.lingframe.mirror.report.TextReportExporter;
 import com.lingframe.mirror.rules.RiskLevel;
@@ -26,8 +30,9 @@ import javax.swing.border.LineBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.Collections;
+import java.util.*;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 灵镜主面板。
@@ -54,8 +59,18 @@ public class LingMirrorPanel {
     private final JBLabel progressLabel;
     private final Project project;
     private JButton exportButton;
+    private JButton cancelButton;
     private JComboBox<String> scopeComboBox;
     private List<RuleViolation> currentViolations = Collections.emptyList();
+    private Runnable currentCancelHandler;
+
+    private static final String SORT_RISK_DESC = "风险等级 ↓";
+    private static final String SORT_RISK_ASC = "风险等级 ↑";
+    private static final String SORT_RULE_ID = "规则 ID";
+    private static final String FILTER_ALL = "全部";
+    private JComboBox<String> filterComboBox;
+    private JComboBox<String> sortComboBox;
+    private JPanel filterBar;
 
     private static final Color CRITICAL_COLOR = new JBColor(new Color(220, 53, 69), new Color(200, 60, 70));
     private static final Color HIGH_COLOR = new JBColor(new Color(255, 153, 0), new Color(230, 140, 0));
@@ -71,6 +86,9 @@ public class LingMirrorPanel {
         mainPanel.setBackground(UIUtil.getPanelBackground());
 
         mainPanel.add(buildHeader(), BorderLayout.NORTH);
+
+        filterBar = buildFilterBar();
+        filterBar.setVisible(false);
 
         resultPanel = new JPanel();
         resultPanel.setLayout(new BoxLayout(resultPanel, BoxLayout.Y_AXIS));
@@ -89,6 +107,7 @@ public class LingMirrorPanel {
 
         JPanel centerWrap = new JPanel(new BorderLayout());
         centerWrap.setBackground(CARD_BG);
+        centerWrap.add(filterBar, BorderLayout.NORTH);
         centerWrap.add(scrollPane, BorderLayout.CENTER);
         centerWrap.add(progressLabel, BorderLayout.SOUTH);
 
@@ -145,8 +164,22 @@ public class LingMirrorPanel {
         exportButton.setEnabled(false);
         exportButton.addActionListener(e -> showExportMenu(exportButton));
 
+        cancelButton = new JButton("取消");
+        cancelButton.setFont(cancelButton.getFont().deriveFont(Font.PLAIN, 12f));
+        cancelButton.setMargin(JBUI.insets(7, 14, 7, 14));
+        cancelButton.setVisible(false);
+        cancelButton.addActionListener(e -> {
+            if (currentCancelHandler != null) {
+                currentCancelHandler.run();
+                currentCancelHandler = null;
+            }
+            cancelButton.setVisible(false);
+            progressLabel.setText("扫描已取消");
+        });
+
         rightActions.add(scopeComboBox);
         rightActions.add(scanButton);
+        rightActions.add(cancelButton);
         rightActions.add(exportButton);
 
         header.add(left, BorderLayout.WEST);
@@ -165,6 +198,52 @@ public class LingMirrorPanel {
 
         footer.add(disclaimer);
         return footer;
+    }
+
+    private JPanel buildFilterBar() {
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        bar.setBackground(UIUtil.getPanelBackground());
+        bar.setBorder(JBUI.Borders.empty(4, 14, 4, 14));
+
+        JBLabel filterLabel = new JBLabel("过滤:");
+        filterLabel.setFont(filterLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        filterLabel.setForeground(JBColor.GRAY);
+
+        filterComboBox = new JComboBox<>();
+        filterComboBox.setFont(filterComboBox.getFont().deriveFont(Font.PLAIN, 12f));
+        filterComboBox.setPreferredSize(new Dimension(120, 28));
+        filterComboBox.addActionListener(e -> {
+            if (currentViolations != null && !currentViolations.isEmpty()) {
+                resultPanel.removeAll();
+                applyFilterAndSort();
+                resultPanel.revalidate();
+                resultPanel.repaint();
+            }
+        });
+
+        JBLabel sortLabel = new JBLabel("排序:");
+        sortLabel.setFont(sortLabel.getFont().deriveFont(Font.PLAIN, 12f));
+        sortLabel.setForeground(JBColor.GRAY);
+
+        sortComboBox = new JComboBox<>(new String[]{SORT_RISK_DESC, SORT_RISK_ASC, SORT_RULE_ID});
+        sortComboBox.setFont(sortComboBox.getFont().deriveFont(Font.PLAIN, 12f));
+        sortComboBox.setPreferredSize(new Dimension(120, 28));
+        sortComboBox.addActionListener(e -> {
+            if (currentViolations != null && !currentViolations.isEmpty()) {
+                resultPanel.removeAll();
+                applyFilterAndSort();
+                resultPanel.revalidate();
+                resultPanel.repaint();
+            }
+        });
+
+        bar.add(filterLabel);
+        bar.add(filterComboBox);
+        bar.add(Box.createHorizontalStrut(8));
+        bar.add(sortLabel);
+        bar.add(sortComboBox);
+
+        return bar;
     }
 
     private void showIdleState() {
@@ -239,7 +318,8 @@ public class LingMirrorPanel {
         resultPanel.repaint();
 
         ScannerEngine engine = new ScannerEngine(project);
-        engine.scan(
+        cancelButton.setVisible(true);
+        currentCancelHandler = engine.scan(
                 scope,
                 progress -> SwingUtilities.invokeLater(() -> {
                     progressLabel.setText(progress);
@@ -247,7 +327,11 @@ public class LingMirrorPanel {
                     scanningLabel.setText("<html><div style='text-align:center'>"
                             + "<b style='font-size:13px'>" + shortMsg + "</b></div></html>");
                 }),
-                violations -> SwingUtilities.invokeLater(() -> renderResult(violations))
+                violations -> SwingUtilities.invokeLater(() -> {
+                    cancelButton.setVisible(false);
+                    currentCancelHandler = null;
+                    renderResult(violations);
+                })
         );
     }
 
@@ -309,13 +393,66 @@ public class LingMirrorPanel {
         resultPanel.removeAll();
 
         if (violations.isEmpty()) {
+            filterBar.setVisible(false);
             renderSafeResult();
         } else {
-            renderViolations(violations);
+            filterBar.setVisible(true);
+            updateFilterOptions(violations);
+            applyFilterAndSort();
         }
 
         resultPanel.revalidate();
         resultPanel.repaint();
+    }
+
+    private void updateFilterOptions(List<RuleViolation> violations) {
+        String prevFilter = (String) filterComboBox.getSelectedItem();
+        filterComboBox.removeAllItems();
+        filterComboBox.addItem(FILTER_ALL);
+
+        Set<String> ruleIds = violations.stream()
+                .map(RuleViolation::getRuleId)
+                .sorted()
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (String ruleId : ruleIds) {
+            filterComboBox.addItem(ruleId);
+        }
+
+        if (prevFilter != null) {
+            for (int i = 0; i < filterComboBox.getItemCount(); i++) {
+                if (prevFilter.equals(filterComboBox.getItemAt(i))) {
+                    filterComboBox.setSelectedIndex(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    private void applyFilterAndSort() {
+        List<RuleViolation> filtered = new ArrayList<>(currentViolations);
+
+        String selectedFilter = (String) filterComboBox.getSelectedItem();
+        if (selectedFilter != null && !FILTER_ALL.equals(selectedFilter)) {
+            filtered = filtered.stream()
+                    .filter(v -> selectedFilter.equals(v.getRuleId()))
+                    .collect(Collectors.toList());
+        }
+
+        SuppressionStore suppression = SuppressionStore.getInstance(project);
+        filtered = filtered.stream()
+                .filter(v -> !suppression.isSuppressed(v.getRuleId(), v.getLocation()))
+                .collect(Collectors.toList());
+
+        String selectedSort = (String) sortComboBox.getSelectedItem();
+        if (SORT_RISK_DESC.equals(selectedSort)) {
+            filtered.sort(Comparator.comparingInt(v -> -v.getRiskLevel().ordinal()));
+        } else if (SORT_RISK_ASC.equals(selectedSort)) {
+            filtered.sort(Comparator.comparingInt(v -> v.getRiskLevel().ordinal()));
+        } else if (SORT_RULE_ID.equals(selectedSort)) {
+            filtered.sort(Comparator.comparing(RuleViolation::getRuleId));
+        }
+
+        renderViolations(filtered);
     }
 
     private void renderSafeResult() {
@@ -468,12 +605,68 @@ public class LingMirrorPanel {
         jumpBtn.setMargin(JBUI.insets(4, 14, 4, 14));
         jumpBtn.addActionListener(e -> {
             if (v.isNavigable() && v.getVirtualFile() != null) {
-                new OpenFileDescriptor(project, v.getVirtualFile(), v.getOffset()).navigate(true);
+                OpenFileDescriptor descriptor = new OpenFileDescriptor(project, v.getVirtualFile(), v.getOffset());
+                Editor editor = FileEditorManager.getInstance(project).openTextEditor(descriptor, true);
+
+                if (editor != null) {
+                    MarkupModel markupModel = editor.getMarkupModel();
+                    TextAttributes attributes = new TextAttributes();
+
+                    // 调配高亮底色：取基础色的 15% 透明度 (0.15)
+                    // 这样既保持了颜色体系的绝对一致，又不会遮盖 Java 代码原本的语法高亮
+                    Color highlightBgColor = ColorUtil.withAlpha(accentColor, 0.15);
+
+                    // 应用颜色
+                    attributes.setBackgroundColor(highlightBgColor);         // 柔和的半透明代码底色
+                    attributes.setErrorStripeColor(accentColor);         // 右侧滚动条使用 100% 纯色标记，醒目提示
+
+                    int lineNumber = editor.getDocument().getLineNumber(v.getOffset());
+                    int startOffset = editor.getDocument().getLineStartOffset(lineNumber);
+                    int endOffset = editor.getDocument().getLineEndOffset(lineNumber);
+
+                    RangeHighlighter highlighter = markupModel.addRangeHighlighter(
+                            startOffset,
+                            endOffset,
+                            HighlighterLayer.WARNING,
+                            attributes,
+                            HighlighterTargetArea.EXACT_RANGE
+                    );
+
+                    // 3秒后动态消散
+                    javax.swing.Timer timer = new javax.swing.Timer(3000, evt -> {
+                        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
+                            if (highlighter.isValid()) {
+                                markupModel.removeHighlighter(highlighter);
+                            }
+                        });
+                    });
+                    timer.setRepeats(false);
+                    timer.start();
+                }
             }
         });
 
         titleRow.add(ruleInfo, BorderLayout.CENTER);
-        titleRow.add(jumpBtn, BorderLayout.EAST);
+
+        JPanel actionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        actionButtons.setOpaque(false);
+
+        JButton suppressBtn = new JButton("抑制");
+        suppressBtn.setFont(suppressBtn.getFont().deriveFont(Font.PLAIN, 11f));
+        suppressBtn.setMargin(JBUI.insets(3, 10, 3, 10));
+        suppressBtn.setForeground(JBColor.GRAY);
+        suppressBtn.setToolTipText("标记为误报，后续扫描不再显示");
+        suppressBtn.addActionListener(e -> {
+            SuppressionStore.getInstance(project).suppress(v.getRuleId(), v.getLocation());
+            resultPanel.removeAll();
+            applyFilterAndSort();
+            resultPanel.revalidate();
+            resultPanel.repaint();
+        });
+
+        actionButtons.add(suppressBtn);
+        actionButtons.add(jumpBtn);
+        titleRow.add(actionButtons, BorderLayout.EAST);
 
         JPanel chainPanel = buildChainPanel(v.getReferenceChain(), accentColor);
         chainPanel.setBackground(UIUtil.getTextFieldBackground());

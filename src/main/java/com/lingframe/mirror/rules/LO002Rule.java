@@ -49,7 +49,7 @@ public class LO002Rule implements LeakDetectionRule {
 
         if (psiClass.isInterface() || psiClass.isAnnotationType()) return violations;
 
-        String ownerPkg = getTopPackage(psiClass.getQualifiedName(), 3);
+        String ownerPkg = RuleUtils.getTopPackage(psiClass.getQualifiedName(), 3);
         if (ownerPkg == null) return violations;
 
         for (PsiField field : psiClass.getFields()) {
@@ -62,9 +62,9 @@ public class LO002Rule implements LeakDetectionRule {
             PsiClass fieldTypeClass = classType.resolve();
             if (fieldTypeClass == null) continue;
 
-            if (isJdkType(fieldTypeClass)) continue;
-            if (isShadeType(fieldTypeClass)) continue;
-            if (isMapOrCollection(fieldTypeClass)) continue;
+            if (RuleUtils.isJdkType(fieldTypeClass)) continue;
+            if (RuleUtils.isShadeClass(fieldTypeClass)) continue;
+            if (RuleUtils.isMapOrCollection(fieldTypeClass)) continue;
             if (isLoggingType(fieldTypeClass)) continue;
             if (isLoggingField(field)) continue;
             if (fieldTypeClass.isEnum()) continue;
@@ -72,37 +72,20 @@ public class LO002Rule implements LeakDetectionRule {
             if (isProtobufType(fieldTypeClass)) continue;
             if (isProtobufGeneratedClass(psiClass)) continue;
 
-            String typePkg = getTopPackage(fieldTypeClass.getQualifiedName(), 3);
+            String typePkg = RuleUtils.getTopPackage(fieldTypeClass.getQualifiedName(), 3);
             if (typePkg == null) continue;
 
             if (typePkg.equals(ownerPkg)) continue;
 
             // 若字段类型是 ClassLoader 子类（如 GroovyClassLoader、URLClassLoader），
-            // 则升级风险为高危——这是 ClassLoader 泄漏，而非普通"外部库类型"引用
+            // 则升级风险为 CRITICAL——ClassLoader 实例直接钉住自身 ClassLoader，阻止 GC 回收
             RiskLevel effectiveRisk = isClassLoaderSubclass(fieldTypeClass)
-                    ? RiskLevel.HIGH : riskLevel();
+                    ? RiskLevel.CRITICAL : riskLevel();
 
             violations.add(buildViolation(field, psiClass, fieldTypeClass, effectiveRisk));
         }
 
         return violations;
-    }
-
-    private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.")
-                || qName.startsWith("org.w3c.")
-                || qName.startsWith("org.xml.");
-    }
-
-    private boolean isShadeType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
     }
 
     private boolean isLoggingType(PsiClass psiClass) {
@@ -126,28 +109,40 @@ public class LO002Rule implements LeakDetectionRule {
         if (psiClass.isInterface()) return true;
         if (psiClass.isAnnotationType()) return true;
 
+        if (!psiClass.hasModifierProperty(PsiModifier.FINAL)
+                && isExternalLibraryType(psiClass)) {
+            return false;
+        }
+
         boolean allFieldsFinal = true;
-        boolean hasNoSetter = true;
         PsiField[] fields = psiClass.getFields();
 
         for (PsiField f : fields) {
             if (f.hasModifierProperty(PsiModifier.STATIC)) continue;
             if (!f.hasModifierProperty(PsiModifier.FINAL)) {
                 allFieldsFinal = false;
+                break;
             }
         }
+
+        if (!allFieldsFinal) return false;
 
         for (PsiMethod m : psiClass.getMethods()) {
             if (m.hasModifierProperty(PsiModifier.STATIC)) continue;
             String name = m.getName();
             if (name.startsWith("set") && name.length() > 3
                     && Character.isUpperCase(name.charAt(3))) {
-                hasNoSetter = false;
-                break;
+                return false;
             }
         }
 
-        return allFieldsFinal && hasNoSetter;
+        return true;
+    }
+
+    private boolean isExternalLibraryType(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+        return qName.startsWith("com.hazelcast.");
     }
 
     private boolean isProtobufType(PsiClass psiClass) {
@@ -165,24 +160,7 @@ public class LO002Rule implements LeakDetectionRule {
     }
 
     private boolean isMapOrCollection(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.util.Map")
-                || qName.startsWith("java.util.HashMap")
-                || qName.startsWith("java.util.LinkedHashMap")
-                || qName.startsWith("java.util.TreeMap")
-                || qName.startsWith("java.util.ConcurrentHashMap")
-                || qName.startsWith("java.util.concurrent.ConcurrentMap")
-                || qName.startsWith("java.util.Collection")
-                || qName.startsWith("java.util.List")
-                || qName.startsWith("java.util.Set")
-                || qName.startsWith("java.util.Queue")
-                || qName.startsWith("java.util.ArrayList")
-                || qName.startsWith("java.util.LinkedList")
-                || qName.startsWith("java.util.HashSet")
-                || qName.startsWith("java.util.LinkedHashSet")
-                || qName.startsWith("java.util.TreeSet")
-                || qName.startsWith("java.util.concurrent.CopyOnWriteArrayList");
+        return RuleUtils.isMapOrCollection(psiClass);
     }
 
     /**
@@ -209,18 +187,6 @@ public class LO002Rule implements LeakDetectionRule {
             current = current.getSuperClass();
         }
         return false;
-    }
-
-    private String getTopPackage(String qName, int segments) {
-        if (qName == null) return null;
-        String[] parts = qName.split("\\.");
-        if (parts.length <= segments) return qName;
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < segments; i++) {
-            if (i > 0) sb.append('.');
-            sb.append(parts[i]);
-        }
-        return sb.toString();
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass, PsiClass fieldTypeClass,

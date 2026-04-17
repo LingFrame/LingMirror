@@ -93,48 +93,15 @@ public class LO003Rule implements LeakDetectionRule {
     }
 
     private boolean isJdkImmutableType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.equals("java.lang.String")
-                || qName.equals("java.lang.Integer")
-                || qName.equals("java.lang.Long")
-                || qName.equals("java.lang.Double")
-                || qName.equals("java.lang.Float")
-                || qName.equals("java.lang.Boolean")
-                || qName.equals("java.lang.Byte")
-                || qName.equals("java.lang.Short")
-                || qName.equals("java.lang.Character")
-                || qName.equals("java.lang.Number");
+        return RuleUtils.isUniversalType(psiClass.getQualifiedName());
     }
 
     private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.");
+        return RuleUtils.isJdkType(psiClass);
     }
 
     private boolean isMapOrCollection(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.util.Map")
-                || qName.startsWith("java.util.HashMap")
-                || qName.startsWith("java.util.LinkedHashMap")
-                || qName.startsWith("java.util.TreeMap")
-                || qName.startsWith("java.util.ConcurrentHashMap")
-                || qName.startsWith("java.util.concurrent.ConcurrentMap")
-                || qName.startsWith("java.util.Collection")
-                || qName.startsWith("java.util.List")
-                || qName.startsWith("java.util.Set")
-                || qName.startsWith("java.util.Queue")
-                || qName.startsWith("java.util.ArrayList")
-                || qName.startsWith("java.util.LinkedList")
-                || qName.startsWith("java.util.HashSet")
-                || qName.startsWith("java.util.LinkedHashSet")
-                || qName.startsWith("java.util.TreeSet")
-                || qName.startsWith("java.util.concurrent.CopyOnWriteArrayList");
+        return RuleUtils.isMapOrCollection(psiClass);
     }
 
     private boolean hasMutatingOperations(PsiClass psiClass, String fieldName) {

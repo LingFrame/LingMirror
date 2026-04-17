@@ -106,12 +106,15 @@ public class HI002Rule implements LeakDetectionRule {
         PsiClassType classType = (PsiClassType) type;
         PsiClass resolved = classType.resolve();
         if (resolved == null) return false;
+        return isThreadLocalClass(resolved);
+    }
 
-        String qualifiedName = resolved.getQualifiedName();
+    private boolean isThreadLocalClass(PsiClass psiClass) {
+        String qualifiedName = psiClass.getQualifiedName();
         if ("java.lang.ThreadLocal".equals(qualifiedName)) return true;
         if ("java.lang.InheritableThreadLocal".equals(qualifiedName)) return true;
 
-        PsiClass superClass = resolved.getSuperClass();
+        PsiClass superClass = psiClass.getSuperClass();
         while (superClass != null) {
             String superQName = superClass.getQualifiedName();
             if ("java.lang.ThreadLocal".equals(superQName)) return true;
@@ -138,8 +141,7 @@ public class HI002Rule implements LeakDetectionRule {
                     }
 
                     PsiClass containingClass = resolved.getContainingClass();
-                    if (containingClass == null
-                            || !"java.lang.ThreadLocal".equals(containingClass.getQualifiedName())) {
+                    if (containingClass == null || !isThreadLocalClass(containingClass)) {
                         super.visitMethodCallExpression(expression);
                         return;
                     }
@@ -243,20 +245,7 @@ public class HI002Rule implements LeakDetectionRule {
         PsiType valueType = typeArgs[0];
         if (!(valueType instanceof PsiClassType)) return false;
         PsiClass valueClass = ((PsiClassType) valueType).resolve();
-        if (valueClass == null) return false;
-
-        String qName = valueClass.getQualifiedName();
-        if (qName == null) return false;
-
-        return qName.startsWith("java.util.Map")
-                || qName.startsWith("java.util.HashMap")
-                || qName.startsWith("java.util.LinkedHashMap")
-                || qName.startsWith("java.util.ConcurrentHashMap")
-                || qName.startsWith("java.util.Collection")
-                || qName.startsWith("java.util.List")
-                || qName.startsWith("java.util.Set")
-                || qName.startsWith("java.util.ArrayList")
-                || qName.startsWith("java.util.HashSet");
+        return RuleUtils.isMapOrCollection(valueClass);
     }
 
     private RuleViolation buildMutableCollectionViolation(PsiClass psiClass, PsiField tlField) {

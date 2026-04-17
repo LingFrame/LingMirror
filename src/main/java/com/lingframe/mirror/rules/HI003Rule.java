@@ -188,13 +188,15 @@ public class HI003Rule implements LeakDetectionRule {
     /**
      * 判断 register/subscribe 调用是否为 API 返回值调用（创建型 API）.
      *
-     * <p>若 register/subscribe 的返回值被使用（赋值给变量、作为 return 值、链式调用），
+     * <p>若 register/subscribe 的返回值被使用（赋值给实例字段、作为 return 值、链式调用），
      * 则这是创建型 API 调用（如 {@code consumerBuilder.subscribe()} 返回 Consumer），
      * 而非向外部注册表注册回调（如 {@code eventBus.subscribe(this)} 返回 void），
      * 不应报告为泄漏.
      *
-     * <p>典型区分：
+     * <p>关键区分：
      * <ul>
+     *   <li>{@code private Disposable sub; sub = eventBus.subscribe(this)} → 赋值给实例字段 → 可在 close() 中取消 → 跳过</li>
+     *   <li>{@code Disposable d = eventBus.subscribe(this)} → 赋值给局部变量 → 方法返回后丢失 → 不跳过</li>
      *   <li>{@code Consumer c = builder.subscribe()} → 创建型 API，返回值被使用 → 跳过</li>
      *   <li>{@code eventBus.subscribe(this)} → 注册型 API，返回 void → 需检测</li>
      * </ul>
@@ -214,13 +216,34 @@ public class HI003Rule implements LeakDetectionRule {
         PsiElement parent = expression.getParent();
         if (parent == null) return false;
 
-        // 返回值被赋值：Consumer c = builder.subscribe()
-        if (parent instanceof PsiLocalVariable || parent instanceof PsiField) {
+        // 返回值被赋值给实例字段：this.sub = eventBus.subscribe() → 可在 close() 中取消 → 跳过
+        if (parent instanceof PsiField) {
+            PsiField field = (PsiField) parent;
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) {
+                return true;
+            }
+            // 静态字段赋值也视为可追踪（虽然不理想，但比局部变量好）
             return true;
         }
-        // 赋值表达式右侧：c = builder.subscribe()
+        // 赋值表达式右侧：this.sub = builder.subscribe()
         if (parent instanceof PsiAssignmentExpression) {
+            PsiExpression lhs = ((PsiAssignmentExpression) parent).getLExpression();
+            if (lhs instanceof PsiReferenceExpression) {
+                PsiElement resolvedLhs = ((PsiReferenceExpression) lhs).resolve();
+                // 赋值给实例字段 → 可在 close() 中取消 → 跳过
+                if (resolvedLhs instanceof PsiField) {
+                    return true;
+                }
+                // 赋值给局部变量 → 方法返回后丢失 → 不跳过（仍需报告）
+                // 局部变量无法在 close() 中使用，属于 Disposable 未保存的问题
+                return false;
+            }
             return true;
+        }
+        // 返回值被赋值给局部变量：Disposable d = eventBus.subscribe()
+        // 局部变量在方法返回后丢失，无法在 close() 中取消 → 不跳过
+        if (parent instanceof PsiLocalVariable) {
+            return false;
         }
         // return 语句：return builder.subscribe()
         if (parent instanceof PsiReturnStatement) {
@@ -280,11 +303,27 @@ public class HI003Rule implements LeakDetectionRule {
         return false;
     }
 
+    private static final Set<String> COLLECTION_MUTATION_METHODS = new HashSet<>();
+    static {
+        Collections.addAll(COLLECTION_MUTATION_METHODS,
+                "add", "addAll", "put", "putAll", "putIfAbsent",
+                "offer", "push", "addFirst", "addLast",
+                "set", "replace", "compute", "computeIfAbsent", "computeIfPresent",
+                "merge", "insert", "append");
+    }
+
     /**
      * 语义过滤：检测 register/subscribe 方法是否为平凡状态设置器.
      *
-     * <p>若方法体仅包含简单赋值语句（如 {@code running = true}、{@code state = State.RUNNING}），
+     * <p>若方法体仅包含对自身字段的简单赋值（如 {@code running = true}、{@code state = State.RUNNING}），
+     * 且不涉及向外部集合添加元素、存储参数引用或调用外部方法，
      * 则判定为平凡状态设置器，不涉及向外部注册表注册监听器，不应报告为泄漏.
+     *
+     * <p>典型误报场景：
+     * <ul>
+     *   <li>{@code ParallelEnumeratorContext.register()} 仅设置 {@code running = true}</li>
+     *   <li>{@code StateMachine.transition()} 仅设置 {@code state = State.RUNNING}</li>
+     * </ul>
      */
     private boolean isTrivialStateSetter(PsiMethodCallExpression expression) {
         PsiMethod resolved = expression.resolveMethod();
@@ -293,51 +332,119 @@ public class HI003Rule implements LeakDetectionRule {
         PsiCodeBlock body = resolved.getBody();
         if (body == null) return false;
 
-        // 检查方法体是否仅包含简单赋值语句（如 this.running = true; this.state = State.RUNNING;）
         boolean[] hasNonTrivialStatement = {false};
         body.accept(new JavaRecursiveElementVisitor() {
             @Override
             public void visitAssignmentExpression(@NotNull PsiAssignmentExpression assignment) {
-                // 允许简单字段赋值，如 running = true, state = X
+                if (hasNonTrivialStatement[0]) return;
+
+                PsiExpression lhs = assignment.getLExpression();
                 PsiExpression rhs = assignment.getRExpression();
+
                 if (rhs == null) {
                     hasNonTrivialStatement[0] = true;
                     return;
                 }
-                // 若右侧是方法调用，则非平凡（如 listeners.add(this)）
-                if (rhs instanceof PsiMethodCallExpression) {
+
+                if (!isAssignmentToOwnField(lhs)) {
                     hasNonTrivialStatement[0] = true;
+                    return;
                 }
-                // 若右侧是引用表达式，检查是否为简单常量/枚举
-                if (rhs instanceof PsiReferenceExpression) {
-                    PsiElement resolvedRef = ((PsiReferenceExpression) rhs).resolve();
-                    // 允许枚举常量和字段引用
-                    if (!(resolvedRef instanceof PsiField) && !(resolvedRef instanceof PsiEnumConstant)) {
-                        // 可能是局部变量或其他引用，仍允许
-                    }
+
+                if (!isTrivialRhs(rhs)) {
+                    hasNonTrivialStatement[0] = true;
+                    return;
                 }
+
                 super.visitAssignmentExpression(assignment);
             }
 
             @Override
             public void visitMethodCallExpression(@NotNull PsiMethodCallExpression call) {
-                // 方法体中的任何方法调用（非赋值右侧）都使其非平凡
-                // 跳过赋值右侧的情况，已在上方处理
+                if (hasNonTrivialStatement[0]) return;
+
+                if (isCollectionMutation(call)) {
+                    hasNonTrivialStatement[0] = true;
+                    return;
+                }
+
                 PsiElement parent = call.getParent();
                 if (!(parent instanceof PsiAssignmentExpression)) {
                     hasNonTrivialStatement[0] = true;
+                    return;
                 }
                 super.visitMethodCallExpression(call);
             }
 
             @Override
             public void visitReturnStatement(@NotNull PsiReturnStatement statement) {
-                // return 语句对平凡性无影响
                 super.visitReturnStatement(statement);
             }
         });
 
         return !hasNonTrivialStatement[0];
+    }
+
+    private boolean isAssignmentToOwnField(PsiExpression lhs) {
+        if (lhs instanceof PsiReferenceExpression) {
+            PsiElement resolved = ((PsiReferenceExpression) lhs).resolve();
+            if (resolved instanceof PsiField) {
+                PsiField field = (PsiField) resolved;
+                if (field.hasModifierProperty(PsiModifier.STATIC)) return false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isTrivialRhs(PsiExpression rhs) {
+        if (rhs instanceof PsiLiteralExpression) return true;
+        if (rhs instanceof PsiPrefixExpression
+                || rhs instanceof PsiPostfixExpression) return true;
+        if (rhs instanceof PsiPolyadicExpression) return true;
+        if (rhs instanceof PsiTypeCastExpression) return true;
+        if (rhs instanceof PsiReferenceExpression) {
+            PsiElement resolvedRef = ((PsiReferenceExpression) rhs).resolve();
+            if (resolvedRef instanceof PsiEnumConstant) return true;
+            if (resolvedRef instanceof PsiField && ((PsiField) resolvedRef).hasModifierProperty(PsiModifier.STATIC)
+                    && ((PsiField) resolvedRef).hasModifierProperty(PsiModifier.FINAL)) return true;
+            if (resolvedRef instanceof PsiField) {
+                PsiField refField = (PsiField) resolvedRef;
+                if (!refField.hasModifierProperty(PsiModifier.STATIC)) return true;
+            }
+            return false;
+        }
+        if (rhs instanceof PsiMethodCallExpression) {
+            PsiMethod called = ((PsiMethodCallExpression) rhs).resolveMethod();
+            if (called != null) {
+                String name = called.getName();
+                if (name.startsWith("get") || name.startsWith("is") || name.startsWith("to")
+                        || "valueOf".equals(name) || "values".equals(name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return false;
+    }
+
+    private boolean isCollectionMutation(PsiMethodCallExpression call) {
+        String methodName = call.getMethodExpression().getReferenceName();
+        if (methodName == null) return false;
+        if (!COLLECTION_MUTATION_METHODS.contains(methodName)) return false;
+
+        PsiMethod resolved = call.resolveMethod();
+        if (resolved == null) return true;
+
+        PsiClass declaringClass = resolved.getContainingClass();
+        if (declaringClass == null) return true;
+
+        String qName = declaringClass.getQualifiedName();
+        if (qName == null) return true;
+
+        return qName.startsWith("java.util.")
+                || qName.startsWith("java.util.concurrent.")
+                || qName.startsWith("java.io.");
     }
 
     private boolean hasCleanupMethod(PsiClass cls) {
@@ -357,7 +464,17 @@ public class HI003Rule implements LeakDetectionRule {
             target = "unknown";
         }
 
-        String location = className + ".destroy/close";
+        // 动态收集类中实际存在的清理方法名
+        List<String> actualCleanupNames = new ArrayList<>();
+        for (PsiMethod method : cls.getMethods()) {
+            if (method.getContainingClass() == cls && isCleanupMethod(method)) {
+                actualCleanupNames.add(method.getName());
+            }
+        }
+        String cleanupMethodsStr = actualCleanupNames.isEmpty()
+                ? "destroy/close" : String.join("/", actualCleanupNames);
+
+        String location = className + "." + cleanupMethodsStr;
 
         Set<String> regDetails = new java.util.LinkedHashSet<>();
         // 判断该 target 下是否有任何注册捕获了 this 引用
@@ -380,31 +497,31 @@ public class HI003Rule implements LeakDetectionRule {
         chainBuilder.append("  └─ ").append(target).append("() 注册监听器\n");
         if (anyCapturesThis) {
             chainBuilder.append("       └─ 匿名内部类.this$0 ← 隐式持有外部类引用\n");
-            chainBuilder.append("            └─ ").append(className).append(" ← ❌ destroy/close 未取消订阅\n");
+            chainBuilder.append("            └─ ").append(className).append(" ← ❌ ").append(cleanupMethodsStr).append(" 未取消订阅\n");
         } else {
             chainBuilder.append("       └─ 注册参数为值对象/坐标 ← 不直接持有 this 引用\n");
-            chainBuilder.append("            └─ ").append(className).append(" ← ⚠ destroy/close 未取消注册(中危)\n");
+            chainBuilder.append("            └─ ").append(className).append(" ← ⚠ ").append(cleanupMethodsStr).append(" 未取消注册(中危)\n");
         }
 
         String description;
         if (anyCapturesThis) {
             description = className + " 在初始化时通过 "
                     + String.join(", ", regDetails)
-                    + " 注册了监听器/回调, 但其 destroy/close/cleanup 方法中"
+                    + " 注册了监听器/回调, 但其 " + cleanupMethodsStr + " 方法中"
                     + " 未调用对应的 unsubscribe/remove/unregister 方法. "
-                    + "即使调用了 destroy(), 监听器仍被外部注册表持有, "
+                    + "即使调用了 " + actualCleanupNames.get(0) + "(), 监听器仍被外部注册表持有, "
                     + "通过匿名内部类的隐式引用(this$0), 整个 "
                     + className + " 实例无法被 GC 回收.";
         } else {
             description = className + " 在初始化时通过 "
                     + String.join(", ", regDetails)
-                    + " 注册了值对象/坐标, 但其 destroy/close/cleanup 方法中"
+                    + " 注册了值对象/坐标, 但其 " + cleanupMethodsStr + " 方法中"
                     + " 未调用对应的 unregister/remove 方法. "
                     + "注册参数为值对象(非 this 引用), 不会直接钉住整个实例, "
                     + "但未取消注册可能导致注册表无限增长或逻辑错误.";
         }
 
-        String fixSuggestion = "1. 在 destroy/close 方法中, 对每个注册的监听器调用对应的 unsubscribe/remove 方法; "
+        String fixSuggestion = "1. 在 " + cleanupMethodsStr + " 方法中, 对每个注册的监听器调用对应的 unsubscribe/remove 方法; "
                 + "2. 将注册时返回的订阅令牌/监听器引用保存到字段, 以便在清理时使用; "
                 + "3. 使用 WeakReference 包装监听器, 或使用 WeakHashMap 存储; "
                 + "4. 考虑使用 try-with-resources 或 Disposable 模式确保清理.";
@@ -562,11 +679,6 @@ public class HI003Rule implements LeakDetectionRule {
     }
 
     private boolean isShadeClass(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName != null && qName.contains(".shade.")) return true;
-        PsiFile file = psiClass.getContainingFile();
-        if (file == null) return false;
-        String path = file.getVirtualFile().getPath();
-        return path.contains("-shade/") || path.contains("-shade\\");
+        return RuleUtils.isShadeClass(psiClass);
     }
 }

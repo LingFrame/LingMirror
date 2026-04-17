@@ -56,95 +56,39 @@ public class CR004Rule implements LeakDetectionRule {
             PsiClass fieldTypeClass = classType.resolve();
             if (fieldTypeClass == null) continue;
 
-            if (isJdkType(fieldTypeClass)) continue;
+            if (RuleUtils.isJdkType(fieldTypeClass)) continue;
 
-            if (isMapOrCollection(fieldTypeClass)) continue;
+            if (RuleUtils.isMapOrCollection(fieldTypeClass)) continue;
 
             if (isForeignLibraryType(psiClass, fieldTypeClass)) continue;
 
-            if (isShadeType(fieldTypeClass)) continue;
+            if (RuleUtils.isShadeClass(fieldTypeClass)) continue;
 
-            if (isBuilderClass(fieldTypeClass)) continue;
+            if (RuleUtils.isBuilderClass(fieldTypeClass)) continue;
 
             if ("DEFAULT_INSTANCE".equals(field.getName())) continue;
 
-            List<String> collectionFields = findCollectionFields(fieldTypeClass);
+            List<CollectionFieldInfo> collectionFields = findCollectionFields(fieldTypeClass);
             if (collectionFields.isEmpty()) continue;
 
-            for (String collectionField : collectionFields) {
-                if (!hasMutatingOperations(fieldTypeClass, collectionField)) continue;
-                violations.add(buildSingleViolation(field, psiClass, fieldTypeClass, collectionField));
+            for (CollectionFieldInfo cfInfo : collectionFields) {
+                if (!hasMutatingOperations(fieldTypeClass, cfInfo.fieldName)) continue;
+                violations.add(buildSingleViolation(field, psiClass, fieldTypeClass, cfInfo));
             }
         }
 
         return violations;
     }
 
-    private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.")
-                || qName.startsWith("org.w3c.")
-                || qName.startsWith("org.xml.");
-    }
-
     private boolean isForeignLibraryType(PsiClass fieldOwner, PsiClass fieldType) {
-        String ownerPkg = getTopPackage(fieldOwner.getQualifiedName(), 3);
-        String typePkg = getTopPackage(fieldType.getQualifiedName(), 3);
+        String ownerPkg = RuleUtils.getTopPackage(fieldOwner.getQualifiedName(), 3);
+        String typePkg = RuleUtils.getTopPackage(fieldType.getQualifiedName(), 3);
         if (ownerPkg == null || typePkg == null) return false;
         return !ownerPkg.equals(typePkg);
     }
 
-    private boolean isShadeType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
-    }
-
-    private boolean isBuilderClass(PsiClass psiClass) {
-        String name = psiClass.getName();
-        if (name == null) return false;
-        return name.endsWith("Builder");
-    }
-
-    private String getTopPackage(String qName, int segments) {
-        if (qName == null) return null;
-        String[] parts = qName.split("\\.");
-        if (parts.length <= segments) return qName;
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < segments; i++) {
-            if (i > 0) sb.append('.');
-            sb.append(parts[i]);
-        }
-        return sb.toString();
-    }
-
-    private boolean isMapOrCollection(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.util.Map")
-                || qName.startsWith("java.util.HashMap")
-                || qName.startsWith("java.util.LinkedHashMap")
-                || qName.startsWith("java.util.TreeMap")
-                || qName.startsWith("java.util.ConcurrentHashMap")
-                || qName.startsWith("java.util.concurrent.ConcurrentMap")
-                || qName.startsWith("java.util.Collection")
-                || qName.startsWith("java.util.List")
-                || qName.startsWith("java.util.Set")
-                || qName.startsWith("java.util.Queue")
-                || qName.startsWith("java.util.ArrayList")
-                || qName.startsWith("java.util.LinkedList")
-                || qName.startsWith("java.util.HashSet")
-                || qName.startsWith("java.util.LinkedHashSet")
-                || qName.startsWith("java.util.TreeSet")
-                || qName.startsWith("java.util.concurrent.CopyOnWriteArrayList");
-    }
-
-    private List<String> findCollectionFields(PsiClass targetClass) {
-        List<String> collectionFields = new ArrayList<>();
+    private List<CollectionFieldInfo> findCollectionFields(PsiClass targetClass) {
+        List<CollectionFieldInfo> collectionFields = new ArrayList<>();
 
         for (PsiField instanceField : targetClass.getFields()) {
             if (instanceField.hasModifierProperty(PsiModifier.STATIC)) continue;
@@ -155,13 +99,94 @@ public class CR004Rule implements LeakDetectionRule {
             PsiClass resolved = ((PsiClassType) fieldType).resolve();
             if (resolved == null) continue;
 
-            if (isMapOrCollection(resolved) || implementsMapOrCollection(resolved)) {
+            if (RuleUtils.isMapOrCollection(resolved) || implementsMapOrCollection(resolved)) {
                 if (!hasCustomTypeParam((PsiClassType) fieldType)) continue;
-                collectionFields.add(instanceField.getName());
+                String elementTypes = extractCustomTypeNames((PsiClassType) fieldType);
+                // 判断自定义类型是否可能持有 ClassLoader 引用
+                // 仅当类型是项目内部定义且所有实例字段均为 JDK 类型时，认为不持有 ClassLoader
+                // 外部库类型（PSI 无法 resolve 其字段）保守判断为可能持有
+                boolean holdsClassLoader = elementTypes == null
+                        || !customTypesAreSimpleValueObjects((PsiClassType) fieldType, targetClass);
+                collectionFields.add(new CollectionFieldInfo(instanceField.getName(), elementTypes, holdsClassLoader));
             }
         }
 
         return collectionFields;
+    }
+
+    /**
+     * 提取集合泛型参数中自定义类型的名称列表（逗号分隔）.
+     * 若无自定义类型参数或无法解析，返回 null.
+     */
+    private String extractCustomTypeNames(PsiClassType collectionType) {
+        PsiType[] typeArgs = collectionType.getParameters();
+        if (typeArgs.length == 0) return null;
+
+        List<String> customNames = new ArrayList<>();
+        for (PsiType arg : typeArgs) {
+            if (!(arg instanceof PsiClassType)) continue;
+            PsiClassType classType = (PsiClassType) arg;
+            PsiClass cls = classType.resolve();
+            if (cls == null) continue;
+            String qName = cls.getQualifiedName();
+            if (qName == null) continue;
+            if (isUniversalType(qName)) continue;
+            if (qName.startsWith("java.") || qName.startsWith("javax.")) continue;
+            customNames.add(cls.getName());
+        }
+        return customNames.isEmpty() ? null : String.join(", ", customNames);
+    }
+
+    /**
+     * 判断集合泛型参数中的自定义类型是否全部为简单值对象（仅含 JDK 类型字段）.
+     * 仅对项目内部定义的类（与 fieldOwner 同包或子包）进行检查，
+     * 外部库类型（PSI 可能无法完整 resolve）保守判断为非简单值对象.
+     */
+    private boolean customTypesAreSimpleValueObjects(PsiClassType collectionType, PsiClass fieldOwner) {
+        PsiType[] typeArgs = collectionType.getParameters();
+        String ownerPkg = RuleUtils.getTopPackage(fieldOwner.getQualifiedName(), 3);
+
+        for (PsiType arg : typeArgs) {
+            if (!(arg instanceof PsiClassType)) continue;
+            PsiClassType classType = (PsiClassType) arg;
+            PsiClass cls = classType.resolve();
+            if (cls == null) continue;
+            String qName = cls.getQualifiedName();
+            if (qName == null) continue;
+            if (RuleUtils.isUniversalType(qName)) continue;
+            if (RuleUtils.isJdkType(cls)) continue;
+
+            // 外部库类型：PSI 可能无法完整 resolve 其字段，保守判断为非简单值对象
+            String typePkg = RuleUtils.getTopPackage(qName, 3);
+            if (ownerPkg != null && typePkg != null && !ownerPkg.equals(typePkg)) {
+                return false;
+            }
+
+            // 项目内部类型：检查所有实例字段是否均为 JDK 类型
+            if (!isSimpleValueObject(cls)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 判断类是否为简单值对象（所有实例字段均为 JDK 类型/基本类型）.
+     * 仅检查一层，不递归（避免过度分析）.
+     */
+    private boolean isSimpleValueObject(PsiClass psiClass) {
+        for (PsiField field : psiClass.getFields()) {
+            if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
+            PsiType fieldType = field.getType();
+            if (fieldType instanceof PsiPrimitiveType) continue;
+            if (!(fieldType instanceof PsiClassType)) return false;
+            PsiClass fieldClass = ((PsiClassType) fieldType).resolve();
+            if (fieldClass == null) return false;
+            if (RuleUtils.isJdkType(fieldClass)) continue;
+            if (RuleUtils.isUniversalType(fieldClass.getQualifiedName())) continue;
+            return false;
+        }
+        return true;
     }
 
     private boolean hasCustomTypeParam(PsiClassType collectionType) {
@@ -182,7 +207,7 @@ public class CR004Rule implements LeakDetectionRule {
         String qName = cls.getQualifiedName();
         if (qName == null) return false;
 
-        if (isUniversalType(qName)) return false;
+        if (RuleUtils.isUniversalType(qName)) return false;
         if (qName.startsWith("java.") || qName.startsWith("javax.")) {
             PsiType[] innerArgs = classType.getParameters();
             for (PsiType inner : innerArgs) {
@@ -193,19 +218,8 @@ public class CR004Rule implements LeakDetectionRule {
         return true;
     }
 
-    private static final Set<String> UNIVERSAL_TYPES = new HashSet<>();
-    static {
-        Collections.addAll(UNIVERSAL_TYPES,
-                "java.lang.Object", "java.lang.String",
-                "java.lang.Integer", "java.lang.Long",
-                "java.lang.Byte", "java.lang.Short",
-                "java.lang.Character", "java.lang.Float",
-                "java.lang.Double", "java.lang.Boolean",
-                "java.lang.Number");
-    }
-
     private boolean isUniversalType(String qName) {
-        return UNIVERSAL_TYPES.contains(qName);
+        return RuleUtils.isUniversalType(qName);
     }
 
     private boolean hasMutatingOperations(PsiClass targetClass, String collectionFieldName) {
@@ -286,22 +300,40 @@ public class CR004Rule implements LeakDetectionRule {
     }
 
     private RuleViolation buildSingleViolation(PsiField field, PsiClass psiClass,
-                                                PsiClass fieldTypeClass, String collectionField) {
-        String location = psiClass.getQualifiedName() + "." + field.getName() + "." + collectionField;
+                                                PsiClass fieldTypeClass, CollectionFieldInfo cfInfo) {
+        String location = psiClass.getQualifiedName() + "." + field.getName() + "." + cfInfo.fieldName;
         String singletonName = fieldTypeClass.getName();
+
+        // 根据集合元素类型决定引用链和描述
+        // 仅当能解析出具体自定义类型且该类型可能持有 ClassLoader 引用时，使用实际类型名
+        // 否则回退到"匿名内部类/lambda"的通用描述（更安全，不会误导）
+        String elementTypeDesc;
+        String chainElementLine;
+        String leakMechanism;
+
+        if (cfInfo.customTypeNames != null && cfInfo.customTypesHoldClassLoader) {
+            elementTypeDesc = cfInfo.customTypeNames;
+            chainElementLine = "            └─ " + cfInfo.customTypeNames + " 实例 ← 隐式持有 ClassLoader\n";
+            leakMechanism = "集合中存储的 " + cfInfo.customTypeNames + " 实例隐式持有其 ClassLoader 引用, "
+                    + "形成 GC Root -> 单例 -> 集合 -> 元素实例 -> ClassLoader 的泄漏链. ";
+        } else {
+            elementTypeDesc = "匿名内部类/lambda";
+            chainElementLine = "            └─ 匿名内部类/lambda ← 隐式持有 this$0\n"
+                    + "                 └─ 外部实例 ← ❌ 无法卸载\n";
+            leakMechanism = "集合中可能存储匿名内部类或 lambda 实例, 它们隐式持有外部类引用(this$0), "
+                    + "形成 GC Root -> 单例 -> 集合 -> 匿名类 -> 外部实例 的泄漏链. ";
+        }
 
         StringBuilder chainBuilder = new StringBuilder();
         chainBuilder.append("static ").append(field.getName())
                 .append("  ← 全局根节点(永不释放)\n");
         chainBuilder.append("  └─ ").append(singletonName).append(" 实例\n");
-        chainBuilder.append("       └─ ").append(collectionField).append(" (Map/Collection)\n");
-        chainBuilder.append("            └─ 匿名内部类/lambda ← 隐式持有 this$0\n");
-        chainBuilder.append("                 └─ 外部实例 ← ❌ 无法卸载\n");
+        chainBuilder.append("       └─ ").append(cfInfo.fieldName).append(" (Map/Collection)\n");
+        chainBuilder.append(chainElementLine);
 
-        String description = "静态单例 " + singletonName + " 内部持有集合字段 " + collectionField + ". "
-                + "集合中可能存储匿名内部类或 lambda 实例, 它们隐式持有外部类引用(this$0), "
-                + "形成 GC Root -> 单例 -> 集合 -> 匿名类 -> 外部实例 的泄漏链. "
-                + "即使外部实例调用了 destroy/close, 只要未从集合中移除监听器, 引用链就不会断开.";
+        String description = "静态单例 " + singletonName + " 内部持有集合字段 " + cfInfo.fieldName + ". "
+                + leakMechanism
+                + "即使外部实例调用了 destroy/close, 只要未从集合中移除, 引用链就不会断开.";
 
         String fixSuggestion = "1. 在 destroy/close 方法中, 主动从单例的集合中移除已注册的监听器/回调; "
                 + "2. 使用 WeakReference 包装监听器, 或使用 WeakHashMap 存储回调; "
@@ -320,5 +352,20 @@ public class CR004Rule implements LeakDetectionRule {
                         field.getTextOffset()
                 )
                 .build();
+    }
+
+    /** 集合字段信息：字段名 + 自定义元素类型名称 */
+    private static class CollectionFieldInfo {
+        final String fieldName;
+        /** 集合泛型参数中自定义类型的名称（逗号分隔），若无法解析则为 null */
+        final String customTypeNames;
+        /** 自定义类型是否可能持有 ClassLoader 引用（仅当类型非简单值对象时为 true） */
+        final boolean customTypesHoldClassLoader;
+
+        CollectionFieldInfo(String fieldName, String customTypeNames, boolean customTypesHoldClassLoader) {
+            this.fieldName = fieldName;
+            this.customTypeNames = customTypeNames;
+            this.customTypesHoldClassLoader = customTypesHoldClassLoader;
+        }
     }
 }

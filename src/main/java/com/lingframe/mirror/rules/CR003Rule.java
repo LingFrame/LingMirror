@@ -61,64 +61,23 @@ public class CR003Rule implements LeakDetectionRule {
             PsiClass fieldClass = classType.resolve();
             if (fieldClass == null) continue;
 
-            if (!isMapOrCollection(fieldClass)) continue;
+            if (!RuleUtils.isMapOrCollection(fieldClass)) continue;
 
-            if (isShadeClass(psiClass)) continue;
+            if (RuleUtils.isShadeClass(psiClass)) continue;
 
             List<String> customTypes = findCustomTypeParams(classType);
             if (customTypes.isEmpty()) continue;
 
             if (isImmutableConstantField(field, psiClass)) continue;
 
-            violations.add(buildViolation(field, psiClass, customTypes));
+            violations.add(buildViolation(field, psiClass, customTypes, classType));
         }
 
         return violations;
     }
 
     private boolean isMapOrCollection(PsiClass psiClass) {
-        return implementsInterface(psiClass, "java.util.Map")
-                || implementsInterface(psiClass, "java.util.Collection");
-    }
-
-    private boolean implementsInterface(PsiClass psiClass, String interfaceFqn) {
-        if (psiClass.getQualifiedName() != null) {
-            if (psiClass.getQualifiedName().equals(interfaceFqn)) return true;
-            if (interfaceFqn.equals("java.util.Map")
-                    && psiClass.getQualifiedName().startsWith("java.util.")
-                    && psiClass.getQualifiedName().contains("Map")) return true;
-            if (interfaceFqn.equals("java.util.Collection")
-                    && (psiClass.getQualifiedName().startsWith("java.util.List")
-                    || psiClass.getQualifiedName().startsWith("java.util.Set")
-                    || psiClass.getQualifiedName().startsWith("java.util.Queue")
-                    || psiClass.getQualifiedName().startsWith("java.util.Deque")
-                    || psiClass.getQualifiedName().startsWith("java.util.Collection")
-                    || psiClass.getQualifiedName().startsWith("java.util.ArrayList")
-                    || psiClass.getQualifiedName().startsWith("java.util.LinkedList")
-                    || psiClass.getQualifiedName().startsWith("java.util.HashSet")
-                    || psiClass.getQualifiedName().startsWith("java.util.LinkedHashSet")
-                    || psiClass.getQualifiedName().startsWith("java.util.TreeSet")
-                    || psiClass.getQualifiedName().startsWith("java.util.Vector")
-                    || psiClass.getQualifiedName().startsWith("java.util.Stack")
-                    || psiClass.getQualifiedName().startsWith("java.util.concurrent.")
-                    )) return true;
-        }
-
-        for (PsiClass iface : psiClass.getInterfaces()) {
-            if (iface.getQualifiedName() != null
-                    && iface.getQualifiedName().equals(interfaceFqn)) return true;
-        }
-
-        PsiClass superClass = psiClass.getSuperClass();
-        if (superClass != null) {
-            return implementsInterface(superClass, interfaceFqn);
-        }
-
-        for (PsiClass iface : psiClass.getInterfaces()) {
-            if (implementsInterface(iface, interfaceFqn)) return true;
-        }
-
-        return false;
+        return RuleUtils.isMapOrCollection(psiClass);
     }
 
     private List<String> findCustomTypeParams(PsiClassType classType) {
@@ -142,11 +101,11 @@ public class CR003Rule implements LeakDetectionRule {
             return false;
         }
 
-        if (isJdkType(canonical)) return false;
+        if (RuleUtils.isJdkType(canonical)) return false;
 
         if (isPrimitiveArrayType(canonical)) return false;
 
-        if (isUniversalWrapperType(canonical)) return false;
+        if (RuleUtils.isUniversalType(canonical)) return false;
 
         if (type instanceof PsiClassType) {
             PsiClass resolved = ((PsiClassType) type).resolve();
@@ -164,29 +123,11 @@ public class CR003Rule implements LeakDetectionRule {
     }
 
     private boolean isUniversalWrapperType(String canonical) {
-        return canonical.equals("java.lang.Object")
-                || canonical.equals("java.lang.String")
-                || canonical.equals("java.lang.Integer")
-                || canonical.equals("java.lang.Long")
-                || canonical.equals("java.lang.Byte")
-                || canonical.equals("java.lang.Short")
-                || canonical.equals("java.lang.Character")
-                || canonical.equals("java.lang.Float")
-                || canonical.equals("java.lang.Double")
-                || canonical.equals("java.lang.Boolean")
-                || canonical.equals("java.lang.Number");
+        return RuleUtils.isUniversalType(canonical);
     }
 
     private boolean isJdkType(String canonical) {
-        if (canonical.startsWith("java.")) return true;
-        if (canonical.startsWith("javax.")) return true;
-        if (canonical.startsWith("com.sun.")) return true;
-        if (canonical.startsWith("sun.")) return true;
-        if (canonical.startsWith("org.w3c.")) return true;
-        if (canonical.startsWith("org.xml.")) return true;
-        if (canonical.startsWith("org.ietf.")) return true;
-        if (canonical.startsWith("org.omg.")) return true;
-        return false;
+        return RuleUtils.isJdkType(canonical);
     }
 
     private String extractShortName(String canonical) {
@@ -196,9 +137,7 @@ public class CR003Rule implements LeakDetectionRule {
     }
 
     private boolean isShadeClass(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
+        return RuleUtils.isShadeClass(psiClass);
     }
 
     private boolean isImmutableConstantField(PsiField field, PsiClass psiClass) {
@@ -257,9 +196,30 @@ public class CR003Rule implements LeakDetectionRule {
                 "compute", "merge", "register", "subscribe");
     }
 
-    private RuleViolation buildViolation(PsiField field, PsiClass psiClass, List<String> customTypes) {
+    private RuleViolation buildViolation(PsiField field, PsiClass psiClass,
+                                          List<String> customTypes, PsiClassType collectionType) {
         String location = psiClass.getQualifiedName() + "." + field.getName();
         boolean isFinal = field.hasModifierProperty(PsiModifier.FINAL);
+
+        // 动态降级逻辑
+        RiskLevel effectiveRisk = RiskLevel.CRITICAL;
+        List<String> downgradeReasons = new ArrayList<>();
+
+        // 检查1: 集合元素类型是否仅持有 JDK 类型字段（无外部 ClassLoader 引用）
+        boolean elementTypesHoldOnlyJdk = elementTypeHoldsOnlyJdkRefs(collectionType, psiClass);
+        if (elementTypesHoldOnlyJdk) {
+            effectiveRisk = RiskLevel.HIGH;
+            downgradeReasons.add("元素类型仅包含 JDK 字段, ClassLoader 泄漏风险降低");
+        }
+
+        // 检查2: 类是否提供了清理方法（remove/clear/invalidate 等）
+        boolean hasCleanup = hasCleanupOperations(psiClass, field.getName());
+        if (hasCleanup) {
+            if (effectiveRisk == RiskLevel.CRITICAL) {
+                effectiveRisk = RiskLevel.HIGH;
+            }
+            downgradeReasons.add("类提供了清理方法, 可主动释放集合条目");
+        }
 
         StringBuilder chainBuilder = new StringBuilder();
         chainBuilder.append("static ").append(field.getName());
@@ -271,7 +231,11 @@ public class CR003Rule implements LeakDetectionRule {
         for (String customType : customTypes) {
             chainBuilder.append("  └─ ").append(customType).append(" 实例\n");
             chainBuilder.append("       └─ ").append(customType).append(".class ← 隐式持有\n");
-            chainBuilder.append("            └─ ClassLoader  ← ❌ 无法卸载\n");
+            if (effectiveRisk == RiskLevel.CRITICAL) {
+                chainBuilder.append("            └─ ClassLoader  ← ❌ 无法卸载\n");
+            } else {
+                chainBuilder.append("            └─ ClassLoader  ← ⚠ ").append(downgradeReasons.get(0)).append("\n");
+            }
         }
 
         String typesStr = String.join("、", customTypes);
@@ -279,6 +243,9 @@ public class CR003Rule implements LeakDetectionRule {
                 + "这些实例隐式持有其 ClassLoader 引用。" + (isFinal ? "final 修饰仅阻止变量重赋值，集合内容仍可无限增长。" : "")
                 + "只要集合中存在条目，ClassLoader 将被永久锁死，无法被 GC 回收。"
                 + "（这是 ClassLoader 泄漏最常见的真实模式：缓存、注册表、会话存储等）";
+        if (!downgradeReasons.isEmpty()) {
+            description += " 降级原因: " + String.join("; ", downgradeReasons) + ".";
+        }
 
         String fixSuggestion = "1. 使用 WeakHashMap 或 WeakReference 包装值，允许 GC 回收不再使用的实例；"
                 + "2. 在生命周期结束时主动调用 clear()/remove() 清理集合；"
@@ -287,7 +254,7 @@ public class CR003Rule implements LeakDetectionRule {
         return RuleViolation.builder()
                 .ruleId(ruleId())
                 .ruleName(ruleName())
-                .riskLevel(riskLevel())
+                .riskLevel(effectiveRisk)
                 .location(location)
                 .referenceChain(chainBuilder.toString())
                 .description(description)
@@ -297,6 +264,115 @@ public class CR003Rule implements LeakDetectionRule {
                         field.getTextOffset()
                 )
                 .build();
+    }
+
+    /**
+     * 检查集合元素的自定义类型是否仅持有 JDK 类型字段（无外部 ClassLoader 引用）.
+     *
+     * <p>若元素类型的所有实例字段都是 JDK 类型/基本类型（递归检查，深度限制3层），
+     * 则该类型虽然"自定义"但不持有有意义的 ClassLoader 引用，可降级.
+     *
+     * <p>对外部库类型（非 JDK、非项目内部包），保守判断为可能持有非 JDK 字段，
+     * 因为 PSI 可能无法完整 resolve 外部库类的字段定义.
+     *
+     * @param collectionType 集合的类型
+     * @param fieldOwner 集合字段所在的类，用于判断元素类型是否为项目内部类型
+     */
+    private boolean elementTypeHoldsOnlyJdkRefs(PsiClassType collectionType, PsiClass fieldOwner) {
+        PsiType[] typeArgs = collectionType.getParameters();
+        String ownerPkg = RuleUtils.getTopPackage(fieldOwner.getQualifiedName(), 3);
+
+        for (PsiType arg : typeArgs) {
+            if (!(arg instanceof PsiClassType)) continue;
+            PsiClass elementClass = ((PsiClassType) arg).resolve();
+            if (elementClass == null) continue;
+            String qName = elementClass.getQualifiedName();
+            if (qName == null) continue;
+            // 跳过 JDK 类型
+            if (RuleUtils.isJdkType(qName) || RuleUtils.isUniversalType(qName)) continue;
+            // 外部库类型（与集合所在类不同顶级包）：保守判断为可能持有非 JDK 字段，不降级
+            // 因为 PSI 可能无法完整 resolve 外部库类的字段（如 BsonValue、JsonPath）
+            String elementPkg = RuleUtils.getTopPackage(qName, 3);
+            if (ownerPkg != null && elementPkg != null && !ownerPkg.equals(elementPkg)) {
+                return false;
+            }
+            // 项目内部类型：检查自定义类型的字段是否全为 JDK 类型
+            if (!holdsOnlyJdkFields(elementClass, 3)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 递归检查类的实例字段是否全为 JDK 类型/基本类型.
+     * @param depth 递归深度限制，防止循环引用导致无限递归
+     */
+    private boolean holdsOnlyJdkFields(PsiClass psiClass, int depth) {
+        if (depth <= 0) return false;  // 超过深度限制，保守判断为非纯 JDK
+
+        for (PsiField field : psiClass.getFields()) {
+            if (field.hasModifierProperty(PsiModifier.STATIC)) continue;
+
+            PsiType fieldType = field.getType();
+            // 基本类型 → OK
+            if (fieldType instanceof PsiPrimitiveType) continue;
+
+            // 数组类型 → 检查元素类型
+            if (fieldType instanceof PsiArrayType) {
+                PsiType componentType = ((PsiArrayType) fieldType).getComponentType();
+                if (componentType instanceof PsiPrimitiveType) continue;
+                if (componentType instanceof PsiClassType) {
+                    PsiClass componentClass = ((PsiClassType) componentType).resolve();
+                    if (componentClass != null && isJdkType(componentClass.getQualifiedName())) continue;
+                }
+                return false;
+            }
+
+            if (!(fieldType instanceof PsiClassType)) continue;
+            PsiClass fieldClass = ((PsiClassType) fieldType).resolve();
+            if (fieldClass == null) continue;
+            String fieldQName = fieldClass.getQualifiedName();
+            if (fieldQName == null) continue;
+
+            // JDK 类型 → OK
+            if (RuleUtils.isJdkType(fieldQName) || RuleUtils.isUniversalType(fieldQName)) continue;
+
+            // 非JDK类型 → 递归检查
+            if (!holdsOnlyJdkFields(fieldClass, depth - 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static final Set<String> CLEANUP_METHODS = new HashSet<>();
+    static {
+        Collections.addAll(CLEANUP_METHODS,
+                "remove", "clear", "invalidate", "evict", "purge", "delete", "cleanup");
+    }
+
+    /**
+     * 检查类是否对指定集合字段提供了清理方法（remove/clear/invalidate 等）.
+     */
+    private boolean hasCleanupOperations(PsiClass psiClass, String fieldName) {
+        boolean[] found = {false};
+        psiClass.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                if (found[0]) return;
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                if (qualifier != null && isReferenceToField(qualifier, fieldName)) {
+                    String methodName = expression.getMethodExpression().getReferenceName();
+                    if (CLEANUP_METHODS.contains(methodName)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
+                super.visitMethodCallExpression(expression);
+            }
+        });
+        return found[0];
     }
 
 }

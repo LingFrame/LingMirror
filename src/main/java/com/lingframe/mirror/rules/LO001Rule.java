@@ -19,18 +19,6 @@ import java.util.List;
  */
 public class LO001Rule implements LeakDetectionRule {
 
-    private static final List<String> CLEANUP_METHOD_NAMES = new ArrayList<>();
-    static {
-        CLEANUP_METHOD_NAMES.add("destroy");
-        CLEANUP_METHOD_NAMES.add("close");
-        CLEANUP_METHOD_NAMES.add("cleanup");
-        CLEANUP_METHOD_NAMES.add("shutdown");
-        CLEANUP_METHOD_NAMES.add("dispose");
-        CLEANUP_METHOD_NAMES.add("release");
-        CLEANUP_METHOD_NAMES.add("stop");
-        CLEANUP_METHOD_NAMES.add("terminate");
-    }
-
     @NotNull
     @Override
     public String ruleId() {
@@ -70,11 +58,11 @@ public class LO001Rule implements LeakDetectionRule {
             PsiClass fieldTypeClass = classType.resolve();
             if (fieldTypeClass == null) continue;
 
-            if (isJdkType(fieldTypeClass)) continue;
-            if (isShadeType(fieldTypeClass)) continue;
-            if (isBuilderClass(fieldTypeClass)) continue;
+            if (RuleUtils.isJdkType(fieldTypeClass)) continue;
+            if (RuleUtils.isShadeClass(fieldTypeClass)) continue;
+            if (RuleUtils.isBuilderClass(fieldTypeClass)) continue;
 
-            if (hasCleanupMethod(fieldTypeClass)) continue;
+            if (RuleUtils.hasCleanupMethod(fieldTypeClass)) continue;
 
             if (hasInternalCollection(fieldTypeClass)) continue;
 
@@ -90,35 +78,7 @@ public class LO001Rule implements LeakDetectionRule {
         String upper = name.toUpperCase();
         return upper.equals("INSTANCE")
                 || upper.equals("SINGLETON")
-                || upper.equals("INSTANCE") && name.equals("INSTANCE")
-                || name.equals("INSTANCE")
-                || name.equals("instance")
-                || name.equals("SINGLETON")
-                || name.equals("singleton")
-                || name.equals("HOLDER");
-    }
-
-    private boolean hasCleanupMethod(PsiClass psiClass) {
-        for (PsiMethod method : psiClass.getMethods()) {
-            String name = method.getName().toLowerCase();
-            for (String cleanup : CLEANUP_METHOD_NAMES) {
-                if (name.contains(cleanup)) return true;
-            }
-        }
-
-        for (PsiClass superClass = psiClass.getSuperClass();
-             superClass != null && superClass.getQualifiedName() != null
-                     && !superClass.getQualifiedName().startsWith("java.");
-             superClass = superClass.getSuperClass()) {
-            for (PsiMethod method : superClass.getMethods()) {
-                String name = method.getName().toLowerCase();
-                for (String cleanup : CLEANUP_METHOD_NAMES) {
-                    if (name.contains(cleanup)) return true;
-                }
-            }
-        }
-
-        return false;
+                || upper.equals("HOLDER");
     }
 
     private boolean hasInternalCollection(PsiClass psiClass) {
@@ -127,44 +87,9 @@ public class LO001Rule implements LeakDetectionRule {
             PsiType t = f.getType();
             if (!(t instanceof PsiClassType)) continue;
             PsiClass resolved = ((PsiClassType) t).resolve();
-            if (resolved == null) continue;
-            String qName = resolved.getQualifiedName();
-            if (qName == null) continue;
-            if (qName.startsWith("java.util.Map")
-                    || qName.startsWith("java.util.HashMap")
-                    || qName.startsWith("java.util.ConcurrentHashMap")
-                    || qName.startsWith("java.util.LinkedHashMap")
-                    || qName.startsWith("java.util.Collection")
-                    || qName.startsWith("java.util.List")
-                    || qName.startsWith("java.util.Set")
-                    || qName.startsWith("java.util.ArrayList")
-                    || qName.startsWith("java.util.HashSet")
-                    || qName.startsWith("java.util.concurrent.CopyOnWriteArrayList")) {
-                return true;
-            }
+            if (RuleUtils.isMapOrCollection(resolved)) return true;
         }
         return false;
-    }
-
-    private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.");
-    }
-
-    private boolean isShadeType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
-    }
-
-    private boolean isBuilderClass(PsiClass psiClass) {
-        String name = psiClass.getName();
-        if (name == null) return false;
-        return name.endsWith("Builder");
     }
 
     private boolean isStatelessSingleton(PsiClass psiClass) {

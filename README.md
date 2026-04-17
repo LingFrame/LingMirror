@@ -6,7 +6,7 @@
 <!-- Plugin description -->
 **灵镜 LingMirror** — 专注 Java 类加载器泄漏的静态诊断工具
 
-点一下，30 秒找出让你 ClassLoader 永远卸载不掉的那条代码引用链。
+点一下，60 秒找出让你 ClassLoader 永远卸载不掉的那条代码引用链。
 
 ### 为什么需要灵镜
 
@@ -18,7 +18,7 @@
 
 灵镜从**源码层面**静态分析泄漏根因，直接定位到具体的代码行和引用链。
 
-### 检测规则（15 条）
+### 检测规则（18 条）
 
 #### CR 系列 — ClassLoader 锁死根因
 
@@ -30,7 +30,7 @@
 | CR-004 | 静态单例持有内部集合 | 🔴 严重 | 静态单例的内部集合动态增长，间接持有 ClassLoader |
 | CR-005 | 静态集合持有通用包装类型 | 🟡 中 | `static Map<String, Object>` 等"垃圾场"集合，无界堆积 |
 | CR-006 | 静态集合持有匿名内部类/lambda | 🔴 严重 | 匿名内部类隐式持有外部类引用，放入静态集合后 ClassLoader 永不释放 |
-| CR-007 | 实例字段环形引用链 | 🟡 中 | A→B→A 环形引用，被静态集合持有时整条对象图无法 GC |
+| CR-007 | 实例字段环形引用链 | 🟡 中 | A→B→A 环形引用，被静态集合持有时整条对象图无法 GC；任一端为单例时降级为低风险 |
 
 #### HI 系列 — 隐式引用泄漏
 
@@ -40,23 +40,29 @@
 | HI-002 | ThreadLocal 不完整清理 | 🟠 高 | ThreadLocal 在部分分支清理，异常路径遗漏 remove |
 | HI-003 | 监听器注册未反注册 | 🟠 高 | `addListener()` 后未在 destroy 中 `removeListener()` |
 | HI-004 | Shutdown Hook 捕获外部引用 | 🟠 高 | `Runtime.addShutdownHook()` 捕获了外部类引用，进程级锁死 |
-| HI-005 | Timer 定时任务捕获外部引用 | 🟠 高 | `java.util.Timer` 持有外部类引用，未 cancel 前永不释放 |
+| HI-006 | ExecutorService 未 shutdown | 🟠 高 | 持有 ExecutorService 但类无 close/shutdown 方法，线程池无法正确关闭 |
+| HI-007 | 反射加载类持有 ClassLoader | 🟠 高 | `Class.forName()` / `ClassLoader.loadClass()` 加载的 Class 隐式持有 ClassLoader |
 
 #### LO 系列 — 低风险提示
 
 | 规则 | 名称 | 级别 | 检测内容 |
 |------|------|------|----------|
 | LO-001 | 静态单例无清理机制 | ⚪ 低 | `static final Xxx INSTANCE` 无 destroy/close/cleanup 方法，热部署场景钉住 ClassLoader |
-| LO-002 | 静态字段持有外部库类型 | ⚪ 低 | `static ObjectMapper MAPPER` 等，热部署场景钉住库 ClassLoader |
+| LO-002 | 静态字段持有外部库类型 | ⚪ 低 | `static ObjectMapper MAPPER` 等，热部署场景钉住库 ClassLoader；外部库非 final 类型不视为不可变 |
 | LO-003 | 枚举单例持有可变状态 | ⚪ 低 | 枚举实例持有 Map/List 等可变集合，JVM 级单例无法释放 |
+| LO-004 | 静态缓存 ServiceLoader 结果 | ⚪ 低 | `ServiceLoader.load()` 加载的 SPI 实例缓存到静态上下文，钉住 ClassLoader |
+| LO-005 | 静态字段持有 Thread 子类 | ⚪ 低 | `static Thread` 子类实例，线程生命周期可能超出预期 |
 
 ### 功能特性
 
 - 📌 **一键跳转** — 点击结果直接定位到问题代码行
--  **引用链可视化** — 从 GC Root 到泄漏点的完整引用路径
+- 🔗 **引用链可视化** — 从 GC Root 到泄漏点的完整引用路径
 - 📊 **扫描范围选择** — 支持整个项目 / 当前模块 / 当前文件
 - 📄 **报告导出** — 导出文本报告，方便团队协作和归档
 - 🧠 **智能降噪** — 自动过滤不可变常量、框架内部集合、shade 重定位库等误报
+- ⚙️ **规则配置** — 可单独开关每条规则，自定义风险等级覆盖
+- 🔍 **结果过滤排序** — 按规则、风险等级、位置过滤，按严重度排序
+- 🚫 **误报抑制** — 右键标记误报，后续扫描自动跳过
 
 ### 适用场景
 

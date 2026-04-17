@@ -135,8 +135,7 @@ public class HI001Rule implements LeakDetectionRule {
                 PsiMethod resolved = expression.resolveMethod();
                 if (resolved != null && targetMethodName.equals(resolved.getName())) {
                     PsiClass containingClass = resolved.getContainingClass();
-                    if (containingClass != null
-                            && "java.lang.ThreadLocal".equals(containingClass.getQualifiedName())) {
+                    if (containingClass != null && isThreadLocalClass(containingClass)) {
                         result.add(expression);
                     }
                 }
@@ -144,6 +143,24 @@ public class HI001Rule implements LeakDetectionRule {
             }
         });
         return result;
+    }
+
+    /**
+     * 判断类是否为 ThreadLocal 或其子类（包括 InheritableThreadLocal 和自定义子类）.
+     */
+    private boolean isThreadLocalClass(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if ("java.lang.ThreadLocal".equals(qName)) return true;
+        if ("java.lang.InheritableThreadLocal".equals(qName)) return true;
+
+        PsiClass superClass = psiClass.getSuperClass();
+        while (superClass != null) {
+            String superQName = superClass.getQualifiedName();
+            if ("java.lang.ThreadLocal".equals(superQName)) return true;
+            superClass = superClass.getSuperClass();
+        }
+
+        return false;
     }
 
     /**

@@ -14,6 +14,14 @@
                 id="LingMirror"
                 anchor="right"
                 icon="/images/logo.png"/>
+
+        <projectService serviceImplementation="com.lingframe.mirror.config.RuleConfig"/>
+        <projectService serviceImplementation="com.lingframe.mirror.config.SuppressionStore"/>
+
+        <projectConfigurable parentId="tools"
+                             instance="com.lingframe.mirror.config.RuleConfigurable"
+                             id="LingMirror.RuleConfig"
+                             displayName="LingMirror"/>
     </extensions>
 
 </idea-plugin>

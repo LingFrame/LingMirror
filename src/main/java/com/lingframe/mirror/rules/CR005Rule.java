@@ -32,20 +32,6 @@ import java.util.List;
  */
 public class CR005Rule implements LeakDetectionRule {
 
-    private static final String[] UNIVERSAL_TYPES = {
-            "java.lang.Object",
-            "java.lang.String",
-            "java.lang.Integer",
-            "java.lang.Long",
-            "java.lang.Byte",
-            "java.lang.Short",
-            "java.lang.Character",
-            "java.lang.Float",
-            "java.lang.Double",
-            "java.lang.Boolean",
-            "java.lang.Number",
-    };
-
     private static final String[] PRIMITIVE_ARRAY_PREFIXES = {
             "byte[]", "short[]", "int[]", "long[]",
             "float[]", "double[]", "char[]", "boolean[]",
@@ -99,11 +85,11 @@ public class CR005Rule implements LeakDetectionRule {
             PsiClass fieldClass = classType.resolve();
             if (fieldClass == null) continue;
 
-            if (!isMapOrCollection(fieldClass)) continue;
+            if (!RuleUtils.isMapOrCollection(fieldClass)) continue;
 
             if (isWeakReferenceBasedCollection(fieldClass)) continue;
 
-            if (isShadeClass(psiClass)) continue;
+            if (RuleUtils.isShadeClass(psiClass)) continue;
 
             PsiType[] typeArgs = classType.getParameters();
             if (typeArgs.length == 0) continue;
@@ -175,14 +161,8 @@ public class CR005Rule implements LeakDetectionRule {
 
     private boolean isNonUniversalJdkType(String canonicalText) {
         if (!canonicalText.startsWith("java.")) return false;
-        for (String universal : UNIVERSAL_TYPES) {
-            if (canonicalText.equals(universal)
-                    || canonicalText.startsWith(universal + "<")
-                    || canonicalText.startsWith(universal + "[")) {
-                return false;
-            }
-        }
-        return true;
+        return !RuleUtils.isUniversalType(canonicalText)
+                && !RuleUtils.isUniversalType(canonicalText.replaceAll("[<\\[].*", ""));
     }
 
     private List<String> extractTypeNames(PsiType[] typeArgs) {
@@ -197,29 +177,11 @@ public class CR005Rule implements LeakDetectionRule {
     }
 
     private boolean isMapOrCollection(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return isMapOrCollectionFqn(qName);
+        return RuleUtils.isMapOrCollection(psiClass);
     }
 
     private boolean isMapOrCollectionFqn(String fqn) {
-        if (fqn.startsWith("java.util.Map")) return true;
-        if (fqn.startsWith("java.util.HashMap")) return true;
-        if (fqn.startsWith("java.util.LinkedHashMap")) return true;
-        if (fqn.startsWith("java.util.TreeMap")) return true;
-        if (fqn.startsWith("java.util.ConcurrentHashMap")) return true;
-        if (fqn.startsWith("java.util.concurrent.ConcurrentMap")) return true;
-        if (fqn.startsWith("java.util.Collection")) return true;
-        if (fqn.startsWith("java.util.List")) return true;
-        if (fqn.startsWith("java.util.Set")) return true;
-        if (fqn.startsWith("java.util.Queue")) return true;
-        if (fqn.startsWith("java.util.ArrayList")) return true;
-        if (fqn.startsWith("java.util.LinkedList")) return true;
-        if (fqn.startsWith("java.util.HashSet")) return true;
-        if (fqn.startsWith("java.util.LinkedHashSet")) return true;
-        if (fqn.startsWith("java.util.TreeSet")) return true;
-        if (fqn.startsWith("java.util.concurrent.CopyOnWriteArrayList")) return true;
-        return false;
+        return RuleUtils.isMapOrCollectionFqn(fqn);
     }
 
     private boolean isWeakReferenceBasedCollection(PsiClass psiClass) {
@@ -229,14 +191,8 @@ public class CR005Rule implements LeakDetectionRule {
     }
 
     private boolean isUniversalJdkType(String canonicalText) {
-        for (String universal : UNIVERSAL_TYPES) {
-            if (canonicalText.equals(universal)
-                    || canonicalText.startsWith(universal + "<")
-                    || canonicalText.startsWith(universal + "[")) {
-                return true;
-            }
-        }
-        return false;
+        return RuleUtils.isUniversalType(canonicalText)
+                || RuleUtils.isUniversalType(canonicalText.replaceAll("[<\\[].*", ""));
     }
 
     private boolean isPrimitiveArray(String canonicalText) {
@@ -376,9 +332,7 @@ public class CR005Rule implements LeakDetectionRule {
     }
 
     private boolean isShadeClass(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.contains(".shade.");
+        return RuleUtils.isShadeClass(psiClass);
     }
 
 }

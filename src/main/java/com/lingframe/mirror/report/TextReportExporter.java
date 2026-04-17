@@ -1,5 +1,11 @@
 package com.lingframe.mirror.report;
 
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
+import com.intellij.openapi.fileChooser.FileChooserFactory;
+import com.intellij.openapi.fileChooser.FileSaverDescriptor;
+import com.intellij.openapi.fileChooser.FileSaverDialog;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.lingframe.mirror.rules.RiskLevel;
@@ -7,10 +13,8 @@ import com.lingframe.mirror.rules.RuleViolation;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
-import javax.swing.filechooser.FileFilter;
 import java.awt.*;
 import java.io.BufferedWriter;
-import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,7 +22,6 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.prefs.Preferences;
 
 /**
  * 灵镜文本报告导出器.
@@ -56,51 +59,30 @@ public class TextReportExporter {
         String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String defaultName = project.getName() + "-report-" + time + ".txt";
 
-        Preferences prefs = Preferences.userNodeForPackage(TextReportExporter.class);
-        String lastDir = prefs.get(LAST_EXPORT_DIR_KEY, null);
-        Path defaultDir = (lastDir != null) ? Path.of(lastDir) : Path.of(System.getProperty("user.home"), "Desktop");
+        FileSaverDescriptor descriptor = new FileSaverDescriptor("导出灵镜扫描报告", "选择报告保存位置", "txt");
+        FileSaverDialog dialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project);
+        com.intellij.openapi.vfs.VirtualFileWrapper wrapper = dialog.save((VirtualFile) null, defaultName);
 
-        JFileChooser fileChooser = new JFileChooser(defaultDir.toFile());
-        fileChooser.setDialogTitle("导出灵镜扫描报告");
-        fileChooser.setSelectedFile(new File(defaultDir.toFile(), defaultName));
-        fileChooser.setFileFilter(new FileFilter() {
-            @Override
-            public boolean accept(File f) {
-                return f.isDirectory() || f.getName().endsWith(".txt");
-            }
+        if (wrapper == null) return;
 
-            @Override
-            public String getDescription() {
-                return "文本报告 (*.txt)";
-            }
-        });
-
-        int result = fileChooser.showSaveDialog(null);
-        if (result != JFileChooser.APPROVE_OPTION) return;
-
-        File selectedFile = fileChooser.getSelectedFile();
-        if (!selectedFile.getName().endsWith(".txt")) {
-            selectedFile = new File(selectedFile.getParent(), selectedFile.getName() + ".txt");
-        }
-
+        Path targetPath = wrapper.getFile().toPath();
         String report = generateReport(project.getName(), violations);
 
-        try (BufferedWriter writer = Files.newBufferedWriter(selectedFile.toPath(), StandardCharsets.UTF_8)) {
+        try (BufferedWriter writer = Files.newBufferedWriter(targetPath, StandardCharsets.UTF_8)) {
             writer.write(report);
-            prefs.put(LAST_EXPORT_DIR_KEY, selectedFile.getParent());
-            JOptionPane.showMessageDialog(
-                    null,
-                    "报告已导出到:\n" + selectedFile.getAbsolutePath(),
+            Notifications.Bus.notify(new Notification(
+                    "LingMirror",
                     "导出成功",
-                    JOptionPane.INFORMATION_MESSAGE
-            );
+                    "报告已导出到: " + targetPath,
+                    NotificationType.INFORMATION
+            ), project);
         } catch (IOException e) {
-            JOptionPane.showMessageDialog(
-                    null,
-                    "导出失败: " + e.getMessage(),
+            Notifications.Bus.notify(new Notification(
+                    "LingMirror",
                     "导出错误",
-                    JOptionPane.ERROR_MESSAGE
-            );
+                    "导出失败: " + e.getMessage(),
+                    NotificationType.ERROR
+            ), project);
         }
     }
 

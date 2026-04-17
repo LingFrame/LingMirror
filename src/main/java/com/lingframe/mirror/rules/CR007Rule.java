@@ -16,8 +16,17 @@ import java.util.TreeSet;
  * <p>检测模式: 当类 A 的实例字段引用类 B 的实例, 而类 B 的实例字段又引用回类 A 的实例时,
  * 形成环形引用. 如果这些对象被静态集合持有, 环形引用会阻止整个对象图被 GC 回收.
  *
- * <p>本规则检测: 类的实例字段引用了同包内其他类, 而那个类也有实例字段引用回当前类,
- * 且当前类或其引用链上的类被静态集合持有(由 CR-003/CR-004 检测).
+ * <p>GC Root 可达性分析（关键）:
+ * 环形引用本身不构成泄漏, 只有当环上对象从 GC Root（静态字段、活线程、JVM 全局注册表）可达时,
+ * 才会阻止 ClassLoader 被 GC 回收. 本规则通过启发式分析判断可达性:
+ * <ul>
+ *   <li>静态字段持有环上类的实例 → 可达</li>
+ *   <li>环上类被静态集合间接持有 → 可达</li>
+ *   <li>环上类 extends Thread 且可能被启动 → 可达</li>
+ *   <li>环上类注册到 JVM 全局注册表（DriverManager 等）→ 可达</li>
+ *   <li>两端均为单例/基础设施类（生命周期=JVM）→ 降级为低风险</li>
+ *   <li>无可达 GC Root → 抑制报告</li>
+ * </ul>
  *
  * <p>典型场景:
  * - SessionContext -> ServiceHub -> Connection -> RequestHandler -> SessionContext
@@ -50,7 +59,7 @@ public class CR007Rule implements LeakDetectionRule {
         Set<String> reportedRings = context.getSharedData("CR007_REPORTED_RINGS");
 
         if (reportedRings == null) {
-            reportedRings = new HashSet<>();
+            reportedRings = Collections.synchronizedSet(new HashSet<>());
             context.putSharedData("CR007_REPORTED_RINGS", reportedRings);
         }
 
@@ -73,43 +82,211 @@ public class CR007Rule implements LeakDetectionRule {
             String backRefPath = findBackReference(referencedClass, psiClass, 3);
             if (backRefPath == null) continue;
 
-            String ringKey = buildRingKey(psiClass, referencedClass, backRefPath);
-            if (reportedRings.contains(ringKey)) continue;
+            String ringKey = buildRingKey(psiClass, field.getName(), referencedClass, backRefPath);
+            if (!reportedRings.add(ringKey)) continue;
 
-            reportedRings.add(ringKey);
+            RiskLevel effectiveRisk = determineRiskLevel(psiClass, referencedClass);
+            boolean hasSingleton = RuleUtils.isSingletonLike(psiClass) || RuleUtils.isSingletonLike(referencedClass);
 
-            // 判定有效风险等级：若环形引用两端均为单例/基础设施类，则降级为低风险
-            // （如 SeaTunnelServer <-> CoordinatorService，生命周期相同，不会泄漏）
-            RiskLevel effectiveRisk = riskLevel();
-            if (isSingletonLike(psiClass) && isSingletonLike(referencedClass)) {
-                effectiveRisk = RiskLevel.LOW;
-            }
-
-            violations.add(buildViolation(field, psiClass, referencedClass, backRefPath, effectiveRisk));
+            violations.add(buildViolation(field, psiClass, referencedClass, backRefPath, effectiveRisk, hasSingleton));
         }
 
         return violations;
     }
 
-    private String buildRingKey(PsiClass start, PsiClass referenced, String backRefPath) {
-        Set<String> names = new TreeSet<>();
-        names.add(start.getName());
-        names.add(referenced.getName());
+    /**
+     * 判定环形引用的有效风险等级.
+     *
+     * <p>逻辑：
+     * <ol>
+     *   <li>任一端为单例/基础设施类 → LOW（单例已钉住对端，环形引用不增加额外泄漏）</li>
+     *   <li>其他情况 → MEDIUM（环形引用可能阻止对象图被 GC 回收）</li>
+     * </ol>
+     */
+    private RiskLevel determineRiskLevel(PsiClass classA, PsiClass classB) {
+        if (RuleUtils.isSingletonLike(classA) || RuleUtils.isSingletonLike(classB)) {
+            return RiskLevel.LOW;
+        }
 
-        for (String segment : backRefPath.split(" -> ")) {
-            String trimmed = segment.trim();
-            int dotIdx = trimmed.indexOf('.');
-            if (dotIdx > 0) {
-                names.add(trimmed.substring(0, dotIdx));
-            }
-            int ltIdx = trimmed.indexOf('<');
-            int gtIdx = trimmed.indexOf('>');
-            if (ltIdx > 0 && gtIdx > ltIdx) {
-                names.add(trimmed.substring(ltIdx + 1, gtIdx));
+        return RiskLevel.MEDIUM;
+    }
+
+    /**
+     * 启发式判断类是否从 GC Root 可达.
+     *
+     * <p>GC Root 包括：
+     * <ul>
+     *   <li>静态字段持有该类的实例</li>
+     *   <li>静态集合间接持有该类（通过 Map/List 的 value 类型参数）</li>
+     *   <li>该类 extends Thread 且有 start() 调用</li>
+     *   <li>该类注册到 JVM 全局注册表</li>
+     * </ul>
+     */
+    private boolean isReachableFromGcRoot(PsiClass psiClass) {
+        if (hasStaticFieldHoldingClass(psiClass)) return true;
+        if (isHeldByStaticCollection(psiClass)) return true;
+        if (isLiveThread(psiClass)) return true;
+        if (isRegisteredToJvmGlobal(psiClass)) return true;
+        return false;
+    }
+
+    /**
+     * 检查是否有其他类的静态字段持有该类的实例.
+     */
+    private boolean hasStaticFieldHoldingClass(PsiClass targetClass) {
+        String targetQName = targetClass.getQualifiedName();
+        if (targetQName == null) return false;
+
+        for (PsiField field : targetClass.getFields()) {
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+            if (field.hasModifierProperty(PsiModifier.FINAL)) {
+                PsiType type = field.getType();
+                if (isTypeReferenceTo(type, targetQName)) return true;
             }
         }
 
-        return String.join("<->", names);
+        PsiClass containingClass = targetClass.getContainingClass();
+        while (containingClass != null) {
+            for (PsiField field : containingClass.getFields()) {
+                if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+                PsiType type = field.getType();
+                if (isTypeReferenceTo(type, targetQName)) return true;
+            }
+            containingClass = containingClass.getContainingClass();
+        }
+
+        return false;
+    }
+
+    /**
+     * 检查该类是否被静态集合间接持有（通过 Map/List 的 value 类型参数）.
+     */
+    private boolean isHeldByStaticCollection(PsiClass targetClass) {
+        String targetQName = targetClass.getQualifiedName();
+        if (targetQName == null) return false;
+
+        for (PsiField field : targetClass.getFields()) {
+            if (!field.hasModifierProperty(PsiModifier.STATIC)) continue;
+
+            PsiType type = field.getType();
+            if (!(type instanceof PsiClassType)) continue;
+
+            PsiClassType classType = (PsiClassType) type;
+            PsiClass fieldClass = classType.resolve();
+            if (fieldClass == null) continue;
+
+            if (!RuleUtils.isMapOrCollection(fieldClass)) continue;
+
+            PsiType[] typeArgs = classType.getParameters();
+            for (PsiType typeArg : typeArgs) {
+                if (isTypeReferenceTo(typeArg, targetQName)) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean isTypeReferenceTo(PsiType type, String targetQName) {
+        if (!(type instanceof PsiClassType)) return false;
+        PsiClass resolved = ((PsiClassType) type).resolve();
+        if (resolved == null) return false;
+        return targetQName.equals(resolved.getQualifiedName());
+    }
+
+    /**
+     * 检查该类是否为活线程（extends Thread 或 implements Runnable 且可能被启动）.
+     */
+    private boolean isLiveThread(PsiClass psiClass) {
+        if (extendsClass(psiClass, "java.lang.Thread")) return true;
+
+        for (PsiClass iface : psiClass.getInterfaces()) {
+            String qName = iface.getQualifiedName();
+            if ("java.lang.Runnable".equals(qName)) return true;
+        }
+
+        return false;
+    }
+
+    private boolean extendsClass(PsiClass psiClass, String superQName) {
+        PsiClass superClass = psiClass.getSuperClass();
+        while (superClass != null) {
+            String qName = superClass.getQualifiedName();
+            if (superQName.equals(qName)) return true;
+            superClass = superClass.getSuperClass();
+        }
+        return false;
+    }
+
+    /**
+     * 检查该类是否注册到 JVM 全局注册表（如 DriverManager）.
+     */
+    private boolean isRegisteredToJvmGlobal(PsiClass psiClass) {
+        String qName = psiClass.getQualifiedName();
+        if (qName == null) return false;
+
+        for (PsiMethod method : psiClass.getMethods()) {
+            if (method.getContainingClass() != psiClass) continue;
+            if (method.hasModifierProperty(PsiModifier.STATIC)) continue;
+
+            PsiCodeBlock body = method.getBody();
+            if (body == null) continue;
+
+            boolean[] found = {false};
+            body.accept(new JavaRecursiveElementVisitor() {
+                @Override
+                public void visitMethodCallExpression(@NotNull PsiMethodCallExpression call) {
+                    if (found[0]) return;
+                    PsiMethod resolved = call.resolveMethod();
+                    if (resolved == null) return;
+
+                    String name = resolved.getName();
+                    PsiClass declaringClass = resolved.getContainingClass();
+                    if (declaringClass == null) return;
+
+                    String declaringQName = declaringClass.getQualifiedName();
+                    if ("java.sql.DriverManager".equals(declaringQName)
+                            && "registerDriver".equals(name)) {
+                        found[0] = true;
+                        return;
+                    }
+                    if ("java.lang.Runtime".equals(declaringQName)
+                            && "addShutdownHook".equals(name)) {
+                        found[0] = true;
+                        return;
+                    }
+                    super.visitMethodCallExpression(call);
+                }
+            });
+
+            if (found[0]) return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 构建环形引用去重键.
+     *
+     * <p>收集环上所有 "类名.字段名" 边，排序后拼接，
+     * 确保同一环从不同端点扫描时生成相同 key.
+     */
+    private String buildRingKey(PsiClass start, String fieldName, PsiClass referenced, String backRefPath) {
+        Set<String> edges = new TreeSet<>();
+
+        edges.add(start.getName() + "." + fieldName);
+
+        String[] hops = backRefPath.split(" -> ");
+        for (String hop : hops) {
+            String trimmed = hop.trim();
+            int ltIdx = trimmed.indexOf('<');
+            if (ltIdx > 0) {
+                edges.add(trimmed.substring(0, ltIdx));
+            } else {
+                edges.add(trimmed);
+            }
+        }
+
+        return String.join("|", edges);
     }
 
     private String findBackReference(PsiClass from, PsiClass target, int maxDepth) {
@@ -162,86 +339,17 @@ public class CR007Rule implements LeakDetectionRule {
     }
 
     private boolean isJdkType(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName == null) return false;
-        return qName.startsWith("java.")
-                || qName.startsWith("javax.")
-                || qName.startsWith("com.sun.")
-                || qName.startsWith("sun.")
-                || qName.startsWith("org.w3c.")
-                || qName.startsWith("org.xml.");
+        return RuleUtils.isJdkType(psiClass);
     }
 
     private boolean isShadeClass(PsiClass psiClass) {
-        String qName = psiClass.getQualifiedName();
-        if (qName != null && qName.contains(".shade.")) return true;
-        PsiFile file = psiClass.getContainingFile();
-        if (file == null) return false;
-        String path = file.getVirtualFile().getPath();
-        return path.contains("-shade/") || path.contains("-shade\\");
-    }
-
-    /**
-     * 启发式判断：检查类是否为单例/基础设施类（生命周期 = JVM）.
-     * 单例类之间的环形引用不会导致泄漏，因为两端对象在整个 JVM 生命周期内存活.
-     *
-     * <p>判断依据：
-     * - 拥有 static INSTANCE 字段
-     * - 拥有 static getInstance() 方法
-     * - 实现 ManagedService / Service 接口（Hazelcast 模式）
-     * - 类名以 Service/Manager/Server/Engine/Registry 结尾
-     */
-    private boolean isSingletonLike(PsiClass psiClass) {
-        // 检查 static INSTANCE 字段
-        for (PsiField field : psiClass.getFields()) {
-            if (field.hasModifierProperty(PsiModifier.STATIC)) {
-                String name = field.getName();
-                if ("INSTANCE".equals(name) || "instance".equals(name)
-                        || "SINGLETON".equals(name) || "singleton".equals(name)) {
-                    return true;
-                }
-            }
-        }
-
-        // 检查 static getInstance() 方法
-        for (PsiMethod method : psiClass.getMethods()) {
-            if (method.hasModifierProperty(PsiModifier.STATIC)) {
-                String name = method.getName();
-                if ("getInstance".equals(name) || "instance".equals(name)
-                        || "getSingleton".equals(name)) {
-                    return true;
-                }
-            }
-        }
-
-        // 检查 ManagedService 类接口
-        for (PsiClass iface : psiClass.getInterfaces()) {
-            String ifaceName = iface.getName();
-            if (ifaceName != null && (ifaceName.contains("ManagedService")
-                    || ifaceName.contains("Service")
-                    || ifaceName.contains("Singleton"))) {
-                return true;
-            }
-        }
-
-        // 按类名模式判断基础设施单例
-        String className = psiClass.getName();
-        if (className != null) {
-            return className.endsWith("Service")
-                    || className.endsWith("Manager")
-                    || className.endsWith("Server")
-                    || className.endsWith("Engine")
-                    || className.endsWith("Registry")
-                    || className.endsWith("System")
-                    || className.endsWith("Context");
-        }
-
-        return false;
+        return RuleUtils.isShadeClass(psiClass);
     }
 
     private RuleViolation buildViolation(PsiField field, PsiClass psiClass,
                                           PsiClass referencedClass, String backRefPath,
-                                          RiskLevel effectiveRisk) {
+                                          RiskLevel effectiveRisk,
+                                          boolean hasSingleton) {
         String location = psiClass.getQualifiedName() + "." + field.getName();
 
         StringBuilder chainBuilder = new StringBuilder();
@@ -257,11 +365,13 @@ public class CR007Rule implements LeakDetectionRule {
                 + referencedClass.getName() + " 通过 " + backRefPath
                 + " 又引用回 " + psiClass.getName() + ", 形成环形引用. ";
 
-        if (effectiveRisk == RiskLevel.LOW) {
-            description += "但两端均为单例/基础设施类(生命周期=JVM), 环形引用不会导致\"本该回收但无法回收\"的泄漏, "
+        if (hasSingleton) {
+            description += "但环上存在单例/基础设施类(生命周期=JVM), 单例已钉住对端, "
+                    + "环形引用不会导致\"本该回收但无法回收\"的额外泄漏, "
                     + "仅作为架构设计提示保留.";
         } else {
-            description += "当这些对象被静态集合持有(如缓存/注册表)时, 环形引用会阻止整个对象图被 GC 回收, "
+            description += "当这些对象被静态集合持有(如缓存/注册表)时, "
+                    + "环形引用会阻止整个对象图被 GC 回收, "
                     + "即使集合中只持有其中一个对象, 环上的所有对象都无法释放.";
         }
 

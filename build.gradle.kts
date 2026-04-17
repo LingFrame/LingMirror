@@ -4,7 +4,6 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
 plugins {
     id("java") // Java support
-    alias(libs.plugins.kotlin) // Kotlin support
     alias(libs.plugins.intelliJPlatform) // IntelliJ Platform Gradle Plugin
     alias(libs.plugins.changelog) // Gradle Changelog Plugin
     alias(libs.plugins.qodana) // Gradle Qodana Plugin
@@ -15,10 +14,6 @@ group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
 
 // 使用 JDK 21 编译，输出 JDK 17 兼容字节码（IDEA 2023.1+ 运行时为 JDK 17）
-kotlin {
-    jvmToolchain(21)
-}
-
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
@@ -132,6 +127,14 @@ changelog {
 
 // Configure Gradle Kover Plugin - read more: https://kotlin.github.io/kotlinx-kover/gradle-plugin/#configuration-details
 kover {
+    currentProject {
+        instrumentation {
+            if (providers.gradleProperty("skipKoverForTest").orNull == "true") {
+                disabledForTestTasks.add("test")
+            }
+        }
+    }
+
     reports {
         total {
             xml {
@@ -144,6 +147,10 @@ kover {
 tasks {
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
+    }
+
+    test {
+        useJUnit()
     }
 
     publishPlugin {

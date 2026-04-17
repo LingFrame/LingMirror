@@ -11,12 +11,14 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.*;
 import com.intellij.psi.search.FileTypeIndex;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.lingframe.mirror.config.RuleConfig;
 import com.lingframe.mirror.rules.*;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -44,7 +46,7 @@ public class ScannerEngine {
 
     public ScannerEngine(@NotNull Project project) {
         this.project = project;
-        this.rules = defaultRules();
+        this.rules = buildActiveRules(project);
     }
 
     public ScannerEngine(@NotNull Project project, @NotNull List<LeakDetectionRule> rules) {
@@ -69,10 +71,13 @@ public class ScannerEngine {
      * @param scope      扫描范围（项目 / 模块 / 文件）
      * @param onProgress 进度回调（在 EDT 上执行）
      * @param onComplete 完成回调（在 EDT 上执行），参数为所有违规项
+     * @return 取消回调，调用即可取消当前扫描
      */
-    public void scan(@NotNull GlobalSearchScope scope,
+    public Runnable scan(@NotNull GlobalSearchScope scope,
                      @NotNull Consumer<String> onProgress,
                      @NotNull Consumer<List<RuleViolation>> onComplete) {
+        AtomicBoolean cancelFlag = new AtomicBoolean(false);
+
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "LingMirror scanning", true) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
@@ -83,7 +88,6 @@ public class ScannerEngine {
                 PsiManager psiManager = PsiManager.getInstance(project);
                 ScanContext context = new ScanContext(project, psiManager);
 
-                // 收集文件列表需要读锁，一次性完成
                 List<VirtualFile> javaFiles = ApplicationManager.getApplication()
                         .runReadAction((Computable<List<VirtualFile>>) () -> collectJavaFiles(scope));
                 int total = javaFiles.size();
@@ -91,13 +95,12 @@ public class ScannerEngine {
                 indicator.setText("LingMirror: found " + total + " Java files");
 
                 for (int i = 0; i < total; i++) {
-                    if (indicator.isCanceled()) break;
+                    if (indicator.isCanceled() || cancelFlag.get()) break;
 
                     VirtualFile vFile = javaFiles.get(i);
                     indicator.setFraction((double) (i + 1) / total);
                     indicator.setText2(vFile.getName());
 
-                    // 逐文件加读锁，避免长时间持有读锁阻塞 IDE 写操作
                     List<RuleViolation> fileViolations = ApplicationManager.getApplication()
                             .runReadAction((Computable<List<RuleViolation>>) () -> {
                                 PsiFile psiFile = psiManager.findFile(vFile);
@@ -114,6 +117,8 @@ public class ScannerEngine {
                 notifyComplete(onComplete, violations);
             }
         });
+
+        return () -> cancelFlag.set(true);
     }
 
     /**
@@ -188,9 +193,10 @@ public class ScannerEngine {
     }
 
     /**
-     * 默认规则集。新增规则只需在此注册，无需修改引擎。
+     * 全量规则集。新增规则只需在此注册，无需修改引擎。
+     * 供配置面板和引擎共同使用。
      */
-    private static List<LeakDetectionRule> defaultRules() {
+    public static List<LeakDetectionRule> allRules() {
         List<LeakDetectionRule> list = new ArrayList<>();
         list.add(new CR001Rule());
         list.add(new CR002Rule());
@@ -204,9 +210,33 @@ public class ScannerEngine {
         list.add(new HI003Rule());
         list.add(new HI004Rule());
         list.add(new HI005Rule());
+        list.add(new HI006Rule());
+        list.add(new HI007Rule());
         list.add(new LO001Rule());
         list.add(new LO002Rule());
         list.add(new LO003Rule());
+        list.add(new LO004Rule());
+        list.add(new LO005Rule());
         return list;
+    }
+
+    /**
+     * 根据项目配置构建活跃规则集：过滤禁用规则，应用自定义风险等级。
+     */
+    private static List<LeakDetectionRule> buildActiveRules(@NotNull Project project) {
+        RuleConfig config = RuleConfig.getInstance(project);
+        List<LeakDetectionRule> all = allRules();
+        List<LeakDetectionRule> active = new ArrayList<>();
+        for (LeakDetectionRule rule : all) {
+            if (config.isRuleEnabled(rule.ruleId())) {
+                RiskLevel override = config.getRiskLevelOverride(rule.ruleId());
+                if (override != null) {
+                    active.add(new RiskLevelOverridingRule(rule, override));
+                } else {
+                    active.add(rule);
+                }
+            }
+        }
+        return active;
     }
 }
