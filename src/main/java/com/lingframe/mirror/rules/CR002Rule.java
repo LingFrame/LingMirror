@@ -119,7 +119,7 @@ public class CR002Rule implements LeakDetectionRule {
                     + "但未发现与当前类注册的 Driver 成对的反注册。";
         }
 
-        description += "（Apache SeaTunnel #10669 中发现相同模式，社区正在推进治理）";
+//        description += "（Apache SeaTunnel #10669 中发现相同模式，社区正在推进治理）";
 
         String fixSuggestion = "在生命周期结束时调用 DriverManager.deregisterDriver(driver)，与注册成对出现。"
                 + "如果反注册在其他类中（如 ShutdownHook 或 ContextListener），请确保覆盖当前注册的 Driver。";

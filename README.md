@@ -4,6 +4,8 @@
 [![Downloads](https://img.shields.io/jetbrains/plugin/d/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 
 <!-- Plugin description -->
+LingMirror is a static diagnostic tool for Java ClassLoader leaks.
+
 **灵镜 LingMirror** — 专注 Java 类加载器泄漏的静态诊断工具
 
 点一下，60 秒找出让你 ClassLoader 永远卸载不掉的那条代码引用链。
@@ -74,7 +76,7 @@
 
 ### 关于灵珑 LingFrame
 
-灵镜是灵珑（LingFrame）生态的诊断工具。灵珑提供运行时零泄漏治理，已在 Apache SeaTunnel 等项目中验证。
+灵镜是灵珑（LingFrame）生态的诊断工具。灵珑提供运行时安全弹性治理，正在 Apache SeaTunnel 等项目中验证。
 
 👉 https://gitee.com/LingFrame/LingFrame
 <!-- Plugin description end -->

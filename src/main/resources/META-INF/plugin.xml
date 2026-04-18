@@ -1,7 +1,23 @@
 <idea-plugin>
     <id>com.lingmirror</id>
     <name>灵镜 • LingMirror</name>
-    <vendor>LingFrame</vendor>
+    <vendor email="3442085427@qq..com" url="https://github.com/LingFrame/LingMirror">LingFrame</vendor>
+
+    <version>0.0.1</version>
+
+    <description><![CDATA[
+      LingMirror is a professional ClassLoader leak detection tool for Java developers.
+      It provides a comprehensive "health check" for your JVM, identifying memory leaks
+      caused by static references, JDBC drivers, and singleton patterns with near 90% accuracy.
+      Key features include:
+      <ul>
+        <li>Deep static code analysis for ClassLoader leaks.</li>
+        <li>Visual reference chain evidence with clear explanations.</li>
+        <li>One-click navigation to problematic code locations.</li>
+        <li>Support for full report export for team review.</li>
+      </ul>
+      Visit our project to solve OOM problems efficiently.
+    ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
