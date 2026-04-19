@@ -12,6 +12,9 @@ public class CR003RuleTest extends BaseRuleTest {
                 import java.util.Map;
                 public class Foo {
                     private static final Map<String, SessionContext> sessions = new HashMap<>();
+                    public void addsession(SessionContext ctx) {
+                        sessions.put("ctx", ctx);
+                    }
                 }
                 class SessionContext {}
                 """);

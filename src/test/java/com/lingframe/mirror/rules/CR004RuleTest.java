@@ -12,8 +12,12 @@ public class CR004RuleTest extends BaseRuleTest {
                 import java.util.Map;
                 public class Foo {
                     private static final Foo INSTANCE = new Foo();
-                    private final Map<String, Object> listeners = new HashMap<>();
+                    private final Map<String, MyObject> listeners = new HashMap<>();
+                    public void addListener(MyObject obj) {
+                        listeners.put("key", obj);
+                    }
                 }
+                class MyObject {}
                 """);
     }
 

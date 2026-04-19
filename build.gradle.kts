@@ -40,7 +40,13 @@ repositories {
 
 // Dependencies are managed with Gradle version catalog - read more: https://docs.gradle.org/current/userguide/version_catalogs.html
 dependencies {
-    testImplementation(libs.junit)
+    // 如果 libs.junit 是 JUnit 4，可以保留（Vintage 引擎会接管），但建议统一升级
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.10.2")
+
+    // 原有依赖保持不变
+    testImplementation(libs.junit)          // 可保留，也可移除
     testImplementation(libs.opentest4j)
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
@@ -57,11 +63,14 @@ dependencies {
         bundledModules(providers.gradleProperty("platformBundledModules").map { it.split(',') })
 
         testFramework(TestFrameworkType.Platform)
+        testFramework(TestFrameworkType.Plugin.Java)
     }
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html
 intellijPlatform {
+    sandboxContainer = layout.buildDirectory.dir("sandbox")
+
     pluginConfiguration {
         name = providers.gradleProperty("pluginName")
         version = providers.gradleProperty("pluginVersion")
@@ -149,13 +158,42 @@ tasks {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
     }
 
-    test {
+    // 1. 全局暴力禁用所有插桩任务（通过类型匹配，防止按名称匹配被绕过）
+    withType<org.jetbrains.intellij.platform.gradle.tasks.InstrumentCodeTask>().configureEach {
+        enabled = false
+    }
+
+    withType<Test>().configureEach {
         useJUnit()
+        
+        // 2. 排除抽象基类，防止 JUnit 引擎将其误认为常规测试用例进行实例化
+        exclude("**/BaseRuleTest*")
+
+        // 3. 【核心修复】：强制类路径对齐
+        // 无论底层插件如何重定向 classpath，强行将原始的 main 和 test 编译输出目录追加到执行环境中
+        val mainClasses = project.sourceSets.main.get().output.classesDirs
+        val testClasses = project.sourceSets.test.get().output.classesDirs
+        classpath = classpath.plus(project.files(mainClasses, testClasses))
+
+        // 开启详细日志，确保如果再报错，能看到具体的堆栈和原因
+        testLogging {
+            events("passed", "skipped", "failed")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
     }
 
     publishPlugin {
         dependsOn(patchChangelog)
     }
+}
+
+tasks.named("prepareTestSandbox") {
+    outputs.upToDateWhen { false }
+}
+
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
 
 intellijPlatformTesting {

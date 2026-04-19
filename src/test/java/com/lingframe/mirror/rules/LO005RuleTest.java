@@ -6,6 +6,12 @@ public class LO005RuleTest extends BaseRuleTest {
         super(LO005Rule.class);
     }
 
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        addProjectJavaFile("org/slf4j/Logger.java", "package org.slf4j; public interface Logger {}");
+    }
+
     public void testInstanceLoggerShouldBeReported() {
         assertSingleViolation("""
                 public class Foo {

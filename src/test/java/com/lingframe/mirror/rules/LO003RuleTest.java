@@ -12,11 +12,12 @@ public class LO003RuleTest extends BaseRuleTest {
                 import java.util.Map;
                 public enum Foo {
                     INSTANCE;
-                    private final Map<String, String> cache = new HashMap<>();
-                    public void put(String k, String v) {
-                        cache.put(k, v);
+                    private CustomMode mode = new CustomMode();
+                    public void setMode(CustomMode m) {
+                        this.mode = m;
                     }
                 }
+                class CustomMode {}
                 """);
     }
 

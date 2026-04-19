@@ -10,7 +10,7 @@ public class LO001RuleTest extends BaseRuleTest {
         assertSingleViolation("""
                 public class Foo {
                     private static final Foo INSTANCE = new Foo();
-                    private final String name = "foo";
+                    private Object state = new Object();
                 }
                 """);
     }

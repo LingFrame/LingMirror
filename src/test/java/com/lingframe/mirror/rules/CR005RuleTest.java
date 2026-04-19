@@ -12,6 +12,9 @@ public class CR005RuleTest extends BaseRuleTest {
                 import java.util.List;
                 public class Foo {
                     private static final List<Object> leaked = new ArrayList<>();
+                    public void addLeaked(Object obj) {
+                        leaked.add(obj);
+                    }
                 }
                 """);
     }
@@ -22,6 +25,9 @@ public class CR005RuleTest extends BaseRuleTest {
                 import java.util.Map;
                 public class Foo {
                     private static final Map<String, Object> cache = new HashMap<>();
+                    public void addCache(Object obj) {
+                        cache.put("key", obj);
+                    }
                 }
                 """);
     }

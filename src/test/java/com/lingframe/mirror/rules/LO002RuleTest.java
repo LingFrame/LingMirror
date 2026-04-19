@@ -8,6 +8,13 @@ public class LO002RuleTest extends BaseRuleTest {
         super(LO002Rule.class);
     }
 
+    @Override
+    protected void setUp() throws Exception {
+        super.setUp();
+        addProjectJavaFile("com/fasterxml/jackson/databind/ObjectMapper.java", "package com.fasterxml.jackson.databind; public class ObjectMapper { public int state; }");
+        addProjectJavaFile("com/hazelcast/config/Config.java", "package com.hazelcast.config; public class Config { public int state; }");
+    }
+
     public void testStaticFieldHoldingExternalTypeShouldBeReported() {
         assertSingleViolation("""
                 public class Foo {

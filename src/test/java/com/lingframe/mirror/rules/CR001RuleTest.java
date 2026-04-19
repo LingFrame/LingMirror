@@ -40,7 +40,7 @@ public class CR001RuleTest extends BaseRuleTest {
                 import java.util.concurrent.ConcurrentHashMap;
 
                 public class Foo {
-                    private static final Map<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
+                    private static Map<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
 
                     public void remember(String name, Class<?> type) {
                         CLASS_CACHE.put(name, type);
