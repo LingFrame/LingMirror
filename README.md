@@ -1,7 +1,7 @@
 # LingMirror
 
-[![Version](https://img.shields.io/jetbrains/plugin/v/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
+[![Version](https://img.shields.io/jetbrains/plugin/v/31342.svg)](https://plugins.jetbrains.com/plugin/31342)
+[![Downloads](https://img.shields.io/jetbrains/plugin/d/31342.svg)](https://plugins.jetbrains.com/plugin/31342)
 
 <!-- Plugin description -->
 LingMirror is a static diagnostic tool for Java ClassLoader leaks.
@@ -97,9 +97,9 @@ LingMirror is a static diagnostic tool for Java ClassLoader leaks.
 
 - **JetBrains Marketplace**：
 
-  访问 [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)，点击 <kbd>Install to ...</kbd> 安装。
+  访问 [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/31342)，点击 <kbd>Install to ...</kbd> 安装。
 
-  也可以从 [最新版本](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID/versions) 下载，然后通过
+  也可以从 [最新版本](https://plugins.jetbrains.com/plugin/31342/versions) 下载，然后通过
   <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd> 手动安装。
 
 - **手动安装**：
