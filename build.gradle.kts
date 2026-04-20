@@ -42,7 +42,7 @@ repositories {
 dependencies {
     // 如果 libs.junit 是 JUnit 4，可以保留（Vintage 引擎会接管），但建议统一升级
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.2")
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.10.2")
 
     // 原有依赖保持不变
