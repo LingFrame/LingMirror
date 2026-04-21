@@ -54,6 +54,7 @@ public class TextReportExporter {
 
     private static final String LAST_EXPORT_DIR_KEY = "lingmirror.last.export.dir";
 
+    @SuppressWarnings("deprecation")
     public static void exportToFile(@NotNull Project project,
                                     @NotNull List<RuleViolation> violations) {
         String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));

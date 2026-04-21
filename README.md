@@ -110,7 +110,7 @@ LingMirror is a static diagnostic tool for Java ClassLoader leaks.
 ## 使用方法
 
 1. 打开 Java 项目
-2. 点击工具栏上的 🔍 灵镜图标，或使用快捷键 `Alt+L`
+2. 点击工具栏上的 🔍 灵镜图标
 3. 选择扫描范围（整个项目 / 当前模块 / 当前文件）
 4. 点击「开始扫描」
 5. 查看结果，点击条目跳转到对应代码行
@@ -120,7 +120,13 @@ LingMirror is a static diagnostic tool for Java ClassLoader leaks.
 
 ```bash
 # 克隆仓库
+
+# 国内
+git clone https://gitee.com/LingFrame/LingMirror.git
+
+# 国际
 git clone https://github.com/LingFrame/LingMirror.git
+
 cd LingMirror
 
 # 构建

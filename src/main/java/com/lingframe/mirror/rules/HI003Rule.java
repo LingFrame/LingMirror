@@ -207,7 +207,7 @@ public class HI003Rule implements LeakDetectionRule {
         if (resolved != null) {
             PsiType returnType = resolved.getReturnType();
             // 返回 void 的 register/subscribe 一定是注册型 API，不跳过
-            if (returnType == null || PsiType.VOID.equals(returnType)) {
+            if (returnType == null || returnType.equalsToText("void")) {
                 return false;
             }
         }
