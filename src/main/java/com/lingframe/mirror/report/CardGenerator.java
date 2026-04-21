@@ -19,241 +19,369 @@ import java.util.List;
 /**
  * 灵镜体检卡片生成器。
  *
- * <p>将扫描结果渲染为横版深色极客风格的诊断卡片，写入系统剪贴板。
- * 支持高风险和安全两种变体。
- *
- * <p>设计约束：
- * <ul>
- *   <li>使用平台感知的 CJK 字体，确保中文正确渲染</li>
- *   <li>立绘要求带 Alpha 通道的 PNG，不做像素级透明化 hack</li>
- *   <li>单横版模板，MVP 阶段不提供多版立绘/光球变色</li>
- * </ul>
+ * <p>
+ * 将扫描结果渲染为横版深色极客风格的诊断卡片，写入系统剪贴板。
+ * 支持高风险和安全两种变体。采用现代 UI 设计（类似 Vercel/Linear 风格）。
  */
 public class CardGenerator {
 
-    private static final int CARD_WIDTH = 1100;
-    private static final int CARD_HEIGHT = 750;
+    public enum Theme {
+        DARK_GEEK,
+        LIGHT_SOFT
+    }
 
-    private static final Color BRAND_CYAN = new Color(100, 200, 255);
-    private static final Color BG_DARK_START = new Color(15, 20, 30);
-    private static final Color BG_DARK_END = new Color(20, 35, 50);
-    private static final Color CODE_BG = new Color(25, 30, 40);
-    private static final Color CODE_BORDER = new Color(60, 70, 90);
-    private static final Color TEXT_DIM = new Color(160, 170, 190);
-    private static final Color TEXT_MUTED = new Color(80, 90, 110);
-    private static final Color RED_ACCENT = new Color(255, 75, 75);
-    private static final Color RED_BG = new Color(110, 25, 25);
-    private static final Color RED_BORDER = new Color(230, 55, 55);
-    private static final Color GREEN_ACCENT = new Color(60, 200, 100);
-    private static final Color GREEN_BG = new Color(15, 50, 25);
-    private static final Color GREEN_BORDER = new Color(40, 120, 60);
-    private static final Color ORANGE_ACCENT = new Color(200, 120, 30);
-    private static final Color ORANGE_BG = new Color(50, 30, 10);
+    private static class ThemeConfig {
+        Color bg, panelBg, panelBorder;
+        Color textPrimary, textSecondary, textMuted, brandCyan;
+        Color colorCritical, bgCritical, borderCritical;
+        Color colorHigh, bgHigh, borderHigh;
+        Color colorMedium, bgMedium, borderMedium;
+        Color colorLow, bgLow, borderLow;
+        Color colorSafe, bgSafe, borderSafe;
 
-    private static final int LEFT_X = 50;
-    private static final int CONTENT_WIDTH = 780;
-    private static final int STAT_GAP = 12;
+        String title, subtitle;
+        String criticalLabel, criticalDesc;
+        String safeLabel, safeDesc;
+        String statCriticalLabel, statCriticalDesc;
+        String statHighLabel, statHighDesc;
+        String statMediumLabel, statMediumDesc;
+        String statLowLabel, statLowDesc;
+        String refChainTitle, refChainPos;
+        String fixSuggestionTitle, disclaimer;
+        boolean showTerminalButtons;
+        String classLoaderText;
+
+        static ThemeConfig get(Theme theme) {
+            ThemeConfig c = new ThemeConfig();
+
+            c.title = "类加载器健康体检报告";
+            c.subtitle = " - 让隐患无所遁形";
+            c.criticalLabel = "高危风险";
+            c.criticalDesc = "极大概率导致 OOM";
+            c.safeLabel = "当前边界安全";
+            c.safeDesc = "未检测到 ClassLoader 泄漏路径，热部署场景建议引入长期治理机制";
+
+            c.statCriticalLabel = "CRITICAL";
+            c.statCriticalDesc = "致命问题";
+            c.statHighLabel = "HIGH";
+            c.statHighDesc = "高风险";
+            c.statMediumLabel = "MEDIUM";
+            c.statMediumDesc = "中风险";
+            c.statLowLabel = "LOW";
+            c.statLowDesc = "低风险";
+
+            c.refChainTitle = "致命引用链证据";
+            c.refChainPos = "位置: ";
+            c.fixSuggestionTitle = "修复建议";
+            c.disclaimer = "免责声明：灵镜基于静态代码分析，无法覆盖所有运行时动态行为。检测结果仅供参考，建议结合生产环境监控或引入灵珑（LingFrame）运行时治理框架进行最终确认。";
+
+            c.showTerminalButtons = true;
+            c.classLoaderText = "ClassLoader";
+
+            if (theme == Theme.DARK_GEEK) {
+                c.bg = new Color(15, 15, 17);
+                c.panelBg = new Color(24, 24, 27);
+                c.panelBorder = new Color(39, 39, 42);
+                c.textPrimary = new Color(244, 244, 245);
+                c.textSecondary = new Color(161, 161, 170);
+                c.textMuted = new Color(113, 113, 122);
+                c.brandCyan = new Color(56, 189, 248);
+
+                c.colorCritical = new Color(220, 53, 69);
+                c.bgCritical = new Color(55, 15, 20);
+                c.borderCritical = new Color(110, 26, 34);
+
+                c.colorHigh = new Color(255, 153, 0);
+                c.bgHigh = new Color(60, 35, 5);
+                c.borderHigh = new Color(120, 75, 0);
+
+                c.colorMedium = new Color(255, 193, 7);
+                c.bgMedium = new Color(60, 45, 10);
+                c.borderMedium = new Color(120, 96, 3);
+
+                c.colorLow = new Color(108, 117, 125);
+                c.bgLow = new Color(30, 32, 35);
+                c.borderLow = new Color(60, 65, 70);
+
+                c.colorSafe = new Color(40, 167, 69);
+                c.bgSafe = new Color(10, 45, 20);
+                c.borderSafe = new Color(20, 85, 35);
+            } else {
+                c.bg = new Color(248, 250, 252);
+                c.panelBg = new Color(255, 255, 255);
+                c.panelBorder = new Color(226, 232, 240);
+                c.textPrimary = new Color(30, 41, 59);
+                c.textSecondary = new Color(100, 116, 139);
+                c.textMuted = new Color(99, 99, 99);
+                c.brandCyan = new Color(14, 165, 233);
+
+                c.colorCritical = new Color(225, 29, 72);
+                c.bgCritical = new Color(255, 228, 230);
+                c.borderCritical = new Color(253, 164, 175);
+
+                c.colorHigh = new Color(234, 88, 12);
+                c.bgHigh = new Color(255, 237, 213);
+                c.borderHigh = new Color(253, 186, 116);
+
+                c.colorMedium = new Color(202, 138, 4);
+                c.bgMedium = new Color(254, 249, 195);
+                c.borderMedium = new Color(253, 224, 71);
+
+                c.colorLow = new Color(71, 85, 105);
+                c.bgLow = new Color(241, 245, 249);
+                c.borderLow = new Color(203, 213, 225);
+
+                c.colorSafe = new Color(22, 163, 74);
+                c.bgSafe = new Color(220, 252, 231);
+                c.borderSafe = new Color(134, 239, 172);
+            }
+            return c;
+        }
+    }
+
+    private static final int CARD_WIDTH = 1200;
+    private static final int CARD_HEIGHT = 860;
+
+    private static final int LEFT_X = 60;
+    private static final int CONTENT_WIDTH = 760;
+    private static final int STAT_GAP = 16;
     private static final int STAT_BOX_W = (CONTENT_WIDTH - STAT_GAP * 3) / 4;
 
     public static void generateAndCopy(@NotNull String projectName, @NotNull List<RuleViolation> violations) {
-        BufferedImage image = render(projectName, violations);
+        generateAndCopy(projectName, violations, Theme.LIGHT_SOFT);
+    }
+
+    public static void generateAndCopy(@NotNull String projectName, @NotNull List<RuleViolation> violations,
+            Theme theme) {
+        BufferedImage image = render(projectName, violations, theme);
         copyToClipboard(image);
     }
 
-    private static BufferedImage render(String projectName, List<RuleViolation> violations) {
-        BufferedImage image = new BufferedImage(CARD_WIDTH, CARD_HEIGHT, BufferedImage.TYPE_INT_ARGB);
+    private static BufferedImage render(String projectName, List<RuleViolation> violations, Theme theme) {
+        ThemeConfig tc = ThemeConfig.get(theme);
+        // 聊天软件分享必须使用 TYPE_INT_RGB，否则 ARGB 在复制到微信/钉钉时会出现黑色背景或颜色反转
+        BufferedImage image = new BufferedImage(CARD_WIDTH, CARD_HEIGHT, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
 
+        // 开启抗锯齿
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
 
-        GradientPaint bg = new GradientPaint(0, 0, BG_DARK_START, CARD_WIDTH, CARD_HEIGHT, BG_DARK_END);
-        g.setPaint(bg);
+        // 背景
+        g.setColor(tc.bg);
         g.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
 
         boolean hasRisk = !violations.isEmpty();
-        drawLeftPanel(g, projectName, violations, hasRisk);
+        drawLeftPanel(g, projectName, violations, hasRisk, tc);
         drawAvatar(g);
-        drawDisclaimer(g);
+        drawDisclaimer(g, tc);
 
         g.dispose();
         return image;
     }
 
-    private static void drawLeftPanel(Graphics2D g, String projectName, List<RuleViolation> violations, boolean hasRisk) {
+    private static void drawLeftPanel(Graphics2D g, String projectName, List<RuleViolation> violations, boolean hasRisk,
+            ThemeConfig tc) {
         int x = LEFT_X;
-        int y = 50;
+        int y = 60;
 
-        g.setColor(BRAND_CYAN);
-        g.setFont(getCjkFont(Font.BOLD, 18));
+        g.setColor(tc.brandCyan);
+        g.setFont(getCjkFont(Font.BOLD, 20));
         g.drawString("🪞 灵镜 LingMirror", x, y);
 
         y += 50;
-        g.setColor(Color.WHITE);
-        g.setFont(getCjkFont(Font.BOLD, 38));
-        g.drawString("类加载器健康体检报告", x, y);
+        g.setColor(tc.textPrimary);
+        g.setFont(getCjkFont(Font.BOLD, 46));
+        g.drawString(tc.title, x, y);
 
-        g.setColor(BRAND_CYAN);
-        g.setFont(getCjkFont(Font.ITALIC, 16));
-        g.drawString("· 让隐患无所遁形", x + 490, y);
+        g.setColor(tc.brandCyan);
+        g.setFont(getCjkFont(Font.PLAIN, 20));
+        g.drawString(tc.subtitle, x + 480, y);
 
-        y += 38;
-        g.setColor(TEXT_DIM);
-        g.setFont(getCjkFont(Font.PLAIN, 14));
+        y += 40;
+        g.setColor(tc.textSecondary);
+        g.setFont(getCjkFont(Font.PLAIN, 16));
         String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-        g.drawString("项目: " + projectName + "    扫描时间: " + time, x, y);
+        g.drawString("项目: " + projectName + "  |  扫描时间: " + time, x, y);
 
-        y += 38;
+        y += 55;
         if (hasRisk) {
-            drawRiskBanner(g, x, y, violations);
-            y += 80;
-            drawRiskStats(g, x, y, violations);
-            y += 108;
-            drawReferenceChain(g, x, y, violations);
-            y += 200;
-            drawFixSuggestion(g, x, y, violations);
+            drawRiskBanner(g, x, y, violations, tc);
+            y += 95;
+            drawRiskStats(g, x, y, violations, tc);
+            y += 125;
+            drawReferenceChain(g, x, y, violations, tc);
+            y += 245;
+            drawFixSuggestion(g, x, y, violations, tc);
         } else {
-            drawSafeBanner(g, x, y);
+            drawSafeBanner(g, x, y, tc);
         }
     }
 
-    private static void drawRiskBanner(Graphics2D g, int x, int y, List<RuleViolation> violations) {
-        g.setColor(RED_BG);
-        g.fillRoundRect(x, y, CONTENT_WIDTH, 56, 10, 10);
-        g.setColor(RED_BORDER);
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(x, y, CONTENT_WIDTH, 56, 10, 10);
+    private static void drawRiskBanner(Graphics2D g, int x, int y, List<RuleViolation> violations, ThemeConfig tc) {
+        g.setColor(tc.bgCritical);
+        g.fillRoundRect(x, y, CONTENT_WIDTH, 70, 16, 16);
+        g.setColor(tc.borderCritical);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, CONTENT_WIDTH, 70, 16, 16);
 
-        g.setColor(RED_ACCENT);
+        g.setColor(tc.colorCritical);
         g.setFont(getCjkFont(Font.BOLD, 24));
-        g.drawString("⚠ 高风险", x + 20, y + 36);
+        g.drawString(tc.criticalLabel, x + 24, y + 44);
 
-        g.setColor(new Color(230, 55, 55));
-        g.fillRoundRect(x + 170, y + 14, 140, 28, 6, 6);
+        g.setColor(tc.colorCritical);
+        g.fillRoundRect(x + 130, y + 20, 150, 30, 8, 8);
         g.setColor(Color.WHITE);
-        g.setFont(getCjkFont(Font.BOLD, 13));
-        g.drawString("极大概率导致 OOM", x + 180, y + 33);
+        g.setFont(getCjkFont(Font.BOLD, 14));
+        g.drawString(tc.criticalDesc, x + 148, y + 41);
 
         long critical = violations.stream()
                 .filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
-        g.setColor(new Color(210, 210, 220));
-        g.setFont(getCjkFont(Font.PLAIN, 14));
-        g.drawString("检测到 " + critical + " 条 ClassLoader 锁死路径", x + 340, y + 35);
+        g.setColor(tc.colorCritical.darker());
+        g.setFont(getCjkFont(Font.PLAIN, 16));
+
+        String tip = "检测到 " + critical + " 条 ClassLoader 锁死路径";
+
+        g.drawString(tip, x + 310, y + 42);
     }
 
-    private static void drawSafeBanner(Graphics2D g, int x, int y) {
-        g.setColor(GREEN_BG);
-        g.fillRoundRect(x, y, CONTENT_WIDTH, 56, 10, 10);
-        g.setColor(GREEN_BORDER);
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(x, y, CONTENT_WIDTH, 56, 10, 10);
+    private static void drawSafeBanner(Graphics2D g, int x, int y, ThemeConfig tc) {
+        g.setColor(tc.bgSafe);
+        g.fillRoundRect(x, y, CONTENT_WIDTH, 70, 16, 16);
+        g.setColor(tc.borderSafe);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, CONTENT_WIDTH, 70, 16, 16);
 
-        g.setColor(GREEN_ACCENT);
+        g.setColor(tc.colorSafe);
         g.setFont(getCjkFont(Font.BOLD, 24));
-        g.drawString("✅ 当前边界安全", x + 20, y + 36);
+        g.drawString(tc.safeLabel, x + 24, y + 44);
 
-        g.setColor(new Color(180, 220, 180));
-        g.setFont(getCjkFont(Font.PLAIN, 14));
-        g.drawString("未检测到 ClassLoader 泄漏路径，热部署场景建议引入长期治理机制", x + 260, y + 35);
+        g.setColor(tc.colorSafe.darker());
+        g.setFont(getCjkFont(Font.PLAIN, 16));
+        g.drawString(tc.safeDesc, x + 160, y + 42);
     }
 
-    private static void drawRiskStats(Graphics2D g, int x, int y, List<RuleViolation> violations) {
+    private static void drawRiskStats(Graphics2D g, int x, int y, List<RuleViolation> violations, ThemeConfig tc) {
         long critical = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.CRITICAL).count();
         long high = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.HIGH).count();
         long medium = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.MEDIUM).count();
         long low = violations.stream().filter(v -> v.getRiskLevel() == RiskLevel.LOW).count();
 
-        Font levelFont = getCjkFont(Font.BOLD, 11);
-        Font countFont = getCjkFont(Font.BOLD, 24);
-        Font labelFont = getCjkFont(Font.PLAIN, 11);
+        Font levelFont = getCjkFont(Font.BOLD, 15);
+        Font countFont = getCjkFont(Font.BOLD, 36);
+        Font labelFont = getCjkFont(Font.PLAIN, 14);
 
-        drawStatBox(g, x, y, "CRITICAL", critical + " 处", "致命问题",
-                RED_BG, RED_ACCENT, levelFont, countFont, labelFont);
-        drawStatBox(g, x + STAT_BOX_W + STAT_GAP, y, "HIGH", high + " 处", "高风险",
-                ORANGE_BG, ORANGE_ACCENT, levelFont, countFont, labelFont);
-        drawStatBox(g, x + (STAT_BOX_W + STAT_GAP) * 2, y, "MEDIUM", medium + " 处", "中风险",
-                new Color(45, 40, 12), new Color(170, 150, 35), levelFont, countFont, labelFont);
-        drawStatBox(g, x + (STAT_BOX_W + STAT_GAP) * 3, y, "LOW", low + " 处", "低风险",
-                new Color(30, 30, 38), new Color(130, 140, 155), levelFont, countFont, labelFont);
+        String unit = " 处";
+
+        drawStatBox(g, x, y, tc.statCriticalLabel, critical + unit, tc.statCriticalDesc,
+                tc.bgCritical, tc.colorCritical, tc.borderCritical, levelFont, countFont, labelFont, tc);
+        drawStatBox(g, x + STAT_BOX_W + STAT_GAP, y, tc.statHighLabel, high + unit, tc.statHighDesc,
+                tc.bgHigh, tc.colorHigh, tc.borderHigh, levelFont, countFont, labelFont, tc);
+        drawStatBox(g, x + (STAT_BOX_W + STAT_GAP) * 2, y, tc.statMediumLabel, medium + unit, tc.statMediumDesc,
+                tc.bgMedium, tc.colorMedium, tc.borderMedium, levelFont, countFont, labelFont, tc);
+        drawStatBox(g, x + (STAT_BOX_W + STAT_GAP) * 3, y, tc.statLowLabel, low + unit, tc.statLowDesc,
+                tc.bgLow, tc.colorLow, tc.borderLow, levelFont, countFont, labelFont, tc);
     }
 
     private static void drawStatBox(Graphics2D g, int x, int y,
-                                    String level, String count, String label,
-                                    Color bg, Color accent,
-                                    Font levelFont, Font countFont, Font labelFont) {
-        int boxH = 80;
+            String level, String count, String label,
+            Color bg, Color accent, Color border,
+            Font levelFont, Font countFont, Font labelFont, ThemeConfig tc) {
+        int boxH = 90;
         g.setColor(bg);
-        g.fillRoundRect(x, y, STAT_BOX_W, boxH, 8, 8);
-        g.setColor(accent);
+        g.fillRoundRect(x, y, STAT_BOX_W, boxH, 12, 12);
+        g.setColor(border);
         g.setStroke(new BasicStroke(1f));
-        g.drawRoundRect(x, y, STAT_BOX_W, boxH, 8, 8);
+        g.drawRoundRect(x, y, STAT_BOX_W, boxH, 12, 12);
 
         g.setFont(levelFont);
-        g.drawString(level, x + 14, y + 22);
+        g.setColor(accent);
+        g.drawString(level, x + 16, y + 26);
 
         g.setFont(countFont);
-        g.setColor(Color.WHITE);
-        g.drawString(count, x + 14, y + 50);
+        g.setColor(tc.textPrimary);
+        g.drawString(count, x + 16, y + 62);
 
         g.setFont(labelFont);
-        g.setColor(new Color(155, 155, 165));
-        g.drawString(label, x + 14, y + 70);
+        g.setColor(tc.textMuted);
+        g.drawString(label, x + 16, y + 82);
     }
 
-    private static void drawReferenceChain(Graphics2D g, int x, int y, List<RuleViolation> violations) {
-        if (violations.isEmpty()) return;
+    private static void drawReferenceChain(Graphics2D g, int x, int y, List<RuleViolation> violations, ThemeConfig tc) {
+        if (violations.isEmpty())
+            return;
         RuleViolation first = violations.get(0);
 
-        g.setColor(Color.WHITE);
-        g.setFont(getCjkFont(Font.BOLD, 15));
-        g.drawString("致命引用链证据（" + first.getRuleId() + "）", x, y);
+        g.setColor(tc.textPrimary);
+        g.setFont(getCjkFont(Font.BOLD, 18));
+        g.drawString(tc.refChainTitle + " (" + first.getRuleId() + ")", x, y);
 
-        y += 10;
-        g.setColor(CODE_BG);
-        g.fillRoundRect(x, y, CONTENT_WIDTH, 155, 6, 6);
-        g.setColor(CODE_BORDER);
-        g.drawRoundRect(x, y, CONTENT_WIDTH, 155, 6, 6);
+        y += 15;
+        g.setColor(tc.panelBg);
+        g.fillRoundRect(x, y, CONTENT_WIDTH, 200, 16, 16);
+        g.setColor(tc.panelBorder);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, CONTENT_WIDTH, 200, 16, 16);
 
-        Font chainFont = new Font(Font.MONOSPACED, Font.PLAIN, 14);
-        g.setFont(chainFont);
-        String[] lines = first.getReferenceChain().split("\n");
-        int lineY = y + 24;
-        for (String line : lines) {
-            if (line.contains("ClassLoader") && line.contains("❌")) {
-                g.setColor(RED_ACCENT);
-            } else if (line.contains("←") || line.contains("└─")) {
-                g.setColor(BRAND_CYAN);
-            } else {
-                g.setColor(new Color(180, 220, 180));
-            }
-            g.drawString(line, x + 16, lineY);
-            lineY += 22;
+        if (tc.showTerminalButtons) {
+            // 窗口控制按钮
+            g.setColor(new Color(239, 68, 68));
+            g.fillOval(x + 16, y + 16, 12, 12);
+            g.setColor(new Color(234, 179, 8));
+            g.fillOval(x + 36, y + 16, 12, 12);
+            g.setColor(new Color(34, 197, 94));
+            g.fillOval(x + 56, y + 16, 12, 12);
+
+            g.setColor(tc.panelBorder);
+            g.drawLine(x, y + 42, x + CONTENT_WIDTH, y + 42);
         }
 
-        y += 133;
-        g.setColor(new Color(130, 140, 160));
-        g.setFont(getCjkFont(Font.PLAIN, 13));
-        g.drawString("位置：" + first.getLocation(), x + 16, y);
+        Font chainFont = getCjkFont(Font.PLAIN, 15);
+        g.setFont(chainFont);
+        String[] lines = first.getReferenceChain().split("\n");
+        int lineY = y + (tc.showTerminalButtons ? 75 : 35);
+        for (String line : lines) {
+            boolean isCritical = line.contains("ClassLoader") && line.contains("❌");
+            line = line.replace("ClassLoader", tc.classLoaderText).replace("❌", " [X]");
+            if (isCritical) {
+                g.setColor(tc.colorCritical);
+            } else if (line.contains("←") || line.contains("└─")) {
+                g.setColor(tc.textMuted);
+            } else {
+                g.setColor(tc.brandCyan);
+            }
+            g.drawString(line, x + 24, lineY);
+            lineY += 28;
+        }
+
+        y += 215;
+        g.setColor(tc.textMuted);
+        g.setFont(getCjkFont(Font.PLAIN, 14));
+        g.drawString(tc.refChainPos + first.getLocation(), x + 16, y + 25);
     }
 
-    private static void drawFixSuggestion(Graphics2D g, int x, int y, List<RuleViolation> violations) {
-        if (violations.isEmpty()) return;
+    private static void drawFixSuggestion(Graphics2D g, int x, int y, List<RuleViolation> violations, ThemeConfig tc) {
+        if (violations.isEmpty())
+            return;
 
-        g.setColor(new Color(30, 35, 45));
-        g.fillRoundRect(x, y, CONTENT_WIDTH, 42, 6, 6);
-        g.setColor(CODE_BORDER);
-        g.drawRoundRect(x, y, CONTENT_WIDTH, 42, 6, 6);
+        g.setColor(tc.panelBg);
+        g.fillRoundRect(x, y, CONTENT_WIDTH, 54, 16, 16);
+        g.setColor(tc.panelBorder);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawRoundRect(x, y, CONTENT_WIDTH, 54, 16, 16);
 
-        g.setColor(BRAND_CYAN);
-        g.setFont(getCjkFont(Font.BOLD, 13));
-        g.drawString("🔧 修复建议", x + 16, y + 27);
+        g.setColor(tc.brandCyan);
+        g.setFont(getCjkFont(Font.BOLD, 16));
+        g.drawString(tc.fixSuggestionTitle, x + 20, y + 33);
 
-        g.setColor(new Color(185, 195, 210));
-        g.setFont(getCjkFont(Font.PLAIN, 13));
+        g.setColor(tc.textSecondary);
+        g.setFont(getCjkFont(Font.PLAIN, 16));
         String fix = violations.get(0).getFixSuggestion();
-        int maxLen = 42;
-        if (fix.length() > maxLen) fix = fix.substring(0, maxLen) + "...";
-        g.drawString(fix, x + 115, y + 27);
+        int maxLen = 65;
+        if (fix.length() > maxLen)
+            fix = fix.substring(0, maxLen) + "...";
+        g.drawString(fix, x + 100, y + 33);
     }
 
     /**
@@ -263,45 +391,42 @@ public class CardGenerator {
     private static void drawAvatar(Graphics2D g) {
         try {
             InputStream is = CardGenerator.class.getResourceAsStream("/images/avatar.png");
-            if (is == null) return;
+            if (is == null)
+                return;
             BufferedImage avatar = ImageIO.read(is);
 
-            int avatarH = 200;
+            int avatarH = 400;
             int avatarW = (int) ((double) avatar.getWidth() / avatar.getHeight() * avatarH);
-            int avatarX = CARD_WIDTH - avatarW - 30;
-            int avatarY = CARD_HEIGHT - avatarH - 50;
+            int avatarX = CARD_WIDTH - avatarW + 10;
+            int avatarY = CARD_HEIGHT - avatarH - 60;
             g.drawImage(avatar, avatarX, avatarY, avatarW, avatarH, null);
         } catch (IOException e) {
             // 立绘缺失不影响卡片生成
         }
     }
 
-    private static void drawDisclaimer(Graphics2D g) {
-        g.setColor(TEXT_MUTED);
-        g.setFont(getCjkFont(Font.PLAIN, 11));
+    private static void drawDisclaimer(Graphics2D g, ThemeConfig tc) {
+        g.setColor(tc.textMuted);
+        g.setFont(getCjkFont(Font.PLAIN, 14));
 
-        String disclaimer = "免责声明：灵镜基于静态代码分析，无法覆盖所有运行时动态行为。"
-                + "检测结果仅供参考，建议结合生产环境监控或引入灵珑（LingFrame）运行时治理框架进行最终确认。";
-        g.drawString(disclaimer, LEFT_X, CARD_HEIGHT - 18);
+        g.drawString(tc.disclaimer, LEFT_X, CARD_HEIGHT - 35);
     }
 
-    /**
-     * 获取支持中文渲染的字体。
-     * 优先使用 Microsoft YaHei（Windows），其次 SimHei，最后回退到 SansSerif。
-     */
     private static Font getCjkFont(int style, int size) {
         GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
         String[] availableFonts = ge.getAvailableFontFamilyNames();
 
         String cjkFamily = "SansSerif";
-        for (String candidate : new String[]{"Microsoft YaHei", "SimHei", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei"}) {
+        for (String candidate : new String[] { "Microsoft YaHei", "SimHei", "PingFang SC", "Noto Sans CJK SC",
+                "WenQuanYi Micro Hei" }) {
             for (String available : availableFonts) {
                 if (available.equals(candidate)) {
                     cjkFamily = candidate;
                     break;
                 }
             }
-            if (!cjkFamily.equals("SansSerif")) break;
+            if (!cjkFamily.equals("SansSerif"))
+                break;
         }
 
         return new Font(cjkFamily, style, size);
@@ -312,7 +437,7 @@ public class CardGenerator {
                 new Transferable() {
                     @Override
                     public DataFlavor[] getTransferDataFlavors() {
-                        return new DataFlavor[]{DataFlavor.imageFlavor};
+                        return new DataFlavor[] { DataFlavor.imageFlavor };
                     }
 
                     @Override
@@ -328,7 +453,6 @@ public class CardGenerator {
                         return image;
                     }
                 },
-                null
-        );
+                null);
     }
 }

@@ -762,12 +762,23 @@ public class LingMirrorPanel {
     private void showExportMenu(JButton source) {
         JPopupMenu menu = new JPopupMenu();
 
-        JMenuItem cardItem = new JMenuItem("📋 复制体检卡片到剪贴板");
-        cardItem.addActionListener(e -> {
-            CardGenerator.generateAndCopy(project.getName(), currentViolations);
+        JMenuItem cardItemDark = new JMenuItem("📋 导出极客暗黑卡片 (面向技术群)");
+        cardItemDark.addActionListener(e -> {
+            CardGenerator.generateAndCopy(project.getName(), currentViolations, CardGenerator.Theme.DARK_GEEK);
             JOptionPane.showMessageDialog(
                     mainPanel,
-                    "体检卡片已复制到剪贴板\n可直接粘贴到微信 / 钉钉 / 飞书",
+                    "极客暗黑风格卡片已复制到剪贴板\n可直接粘贴到微信 / 钉钉 / 飞书",
+                    "导出成功",
+                    JOptionPane.INFORMATION_MESSAGE
+            );
+        });
+
+        JMenuItem cardItemLight = new JMenuItem("📋 导出清新明亮卡片 (面向大众/小红书)");
+        cardItemLight.addActionListener(e -> {
+            CardGenerator.generateAndCopy(project.getName(), currentViolations, CardGenerator.Theme.LIGHT_SOFT);
+            JOptionPane.showMessageDialog(
+                    mainPanel,
+                    "清新明亮风格卡片已复制到剪贴板\n可直接粘贴到微信 / 钉钉 / 飞书",
                     "导出成功",
                     JOptionPane.INFORMATION_MESSAGE
             );
@@ -776,7 +787,8 @@ public class LingMirrorPanel {
         JMenuItem textItem = new JMenuItem("📄 导出文本报告(.txt)");
         textItem.addActionListener(e -> TextReportExporter.exportToFile(project, currentViolations));
 
-        menu.add(cardItem);
+        menu.add(cardItemDark);
+        menu.add(cardItemLight);
         menu.addSeparator();
         menu.add(textItem);
 
