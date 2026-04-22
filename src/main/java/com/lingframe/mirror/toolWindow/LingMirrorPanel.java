@@ -429,6 +429,8 @@ public class LingMirrorPanel {
     }
 
     private void applyFilterAndSort() {
+        resultPanel.removeAll();
+
         List<RuleViolation> filtered = new ArrayList<>(currentViolations);
 
         String selectedFilter = (String) filterComboBox.getSelectedItem();
@@ -445,9 +447,9 @@ public class LingMirrorPanel {
 
         String selectedSort = (String) sortComboBox.getSelectedItem();
         if (SORT_RISK_DESC.equals(selectedSort)) {
-            filtered.sort(Comparator.comparingInt(v -> -v.getRiskLevel().ordinal()));
-        } else if (SORT_RISK_ASC.equals(selectedSort)) {
             filtered.sort(Comparator.comparingInt(v -> v.getRiskLevel().ordinal()));
+        } else if (SORT_RISK_ASC.equals(selectedSort)) {
+            filtered.sort(Comparator.comparingInt(v -> -v.getRiskLevel().ordinal()));
         } else if (SORT_RULE_ID.equals(selectedSort)) {
             filtered.sort(Comparator.comparing(RuleViolation::getRuleId));
         }

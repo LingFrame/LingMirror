@@ -3,17 +3,17 @@ package com.lingframe.mirror.report;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
 import com.intellij.notification.Notifications;
-import com.intellij.openapi.fileChooser.FileChooserFactory;
-import com.intellij.openapi.fileChooser.FileSaverDescriptor;
-import com.intellij.openapi.fileChooser.FileSaverDialog;
+import com.intellij.openapi.fileChooser.FileChooser;
+import com.intellij.openapi.fileChooser.FileChooserDescriptor;
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.lingframe.mirror.rules.RiskLevel;
 import com.lingframe.mirror.rules.RuleViolation;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
-import java.awt.*;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -54,19 +56,34 @@ public class TextReportExporter {
 
     private static final String LAST_EXPORT_DIR_KEY = "lingmirror.last.export.dir";
 
-    @SuppressWarnings("deprecation")
     public static void exportToFile(@NotNull Project project,
                                     @NotNull List<RuleViolation> violations) {
         String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String defaultName = project.getName() + "-report-" + time + ".txt";
 
-        FileSaverDescriptor descriptor = new FileSaverDescriptor("导出灵镜扫描报告", "选择报告保存位置", "txt");
-        FileSaverDialog dialog = FileChooserFactory.getInstance().createSaveFileDialog(descriptor, project);
-        com.intellij.openapi.vfs.VirtualFileWrapper wrapper = dialog.save((VirtualFile) null, defaultName);
+        FileChooserDescriptor descriptor = FileChooserDescriptorFactory.createSingleFolderDescriptor();
+        descriptor.setTitle("导出灵镜扫描报告");
+        descriptor.setDescription("选择报告保存位置");
+        VirtualFile baseDir = project.getBasePath() != null
+                ? LocalFileSystem.getInstance().findFileByPath(project.getBasePath())
+                : null;
+        VirtualFile selectedDir = FileChooser.chooseFile(descriptor, project, baseDir);
 
-        if (wrapper == null) return;
+        if (selectedDir == null || !selectedDir.isDirectory()) return;
 
-        Path targetPath = wrapper.getFile().toPath();
+        VirtualFile existingFile = selectedDir.findChild(defaultName);
+        if (existingFile != null) {
+            int result = JOptionPane.showConfirmDialog(
+                    null,
+                    "文件 " + defaultName + " 已存在，是否覆盖？",
+                    "确认覆盖",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            if (result != JOptionPane.YES_OPTION) return;
+        }
+
+        Path targetPath = java.nio.file.Paths.get(selectedDir.getPath(), defaultName);
         String report = generateReport(project.getName(), violations);
 
         try (BufferedWriter writer = Files.newBufferedWriter(targetPath, StandardCharsets.UTF_8)) {
@@ -89,6 +106,9 @@ public class TextReportExporter {
 
     public static String generateReport(@NotNull String projectName,
                                         @NotNull List<RuleViolation> violations) {
+        List<RuleViolation> sorted = new ArrayList<>(violations);
+        sorted.sort(Comparator.comparingInt(v -> v.getRiskLevel().ordinal()));
+
         StringBuilder sb = new StringBuilder();
 
         String separator = "============================================";
@@ -135,8 +155,8 @@ public class TextReportExporter {
 
         String divider = "------";
 
-        for (int i = 0; i < violations.size(); i++) {
-            RuleViolation v = violations.get(i);
+        for (int i = 0; i < sorted.size(); i++) {
+            RuleViolation v = sorted.get(i);
             String riskLabel;
             if (v.getRiskLevel() == RiskLevel.CRITICAL) {
                 riskLabel = "致命";
